@@ -1,0 +1,7 @@
+step,remaining_n,excluded_n,retained_percent
+All respondents,16997,0,100
+Adults aged 18+,14423,2574,84.86
+Adult travellers,9100,5323,53.54
+Complete trip distances,9088,12,53.47
+Valid population density,9052,36,53.26
+Valid core covariates,9052,0,53.26
