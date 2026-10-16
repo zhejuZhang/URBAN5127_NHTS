@@ -1,0 +1,330 @@
+
+# 步骤七 出行距离数据质量审计
+
+## 7.1 检查原始数据和数值转换
+```{r trip_distance_audit}
+# 查看行程表规模
+dim(trip)
+
+# 检查 TRPMILES 字段类型
+class(trip$TRPMILES) 
+
+# 查看 TRPMILES 字段前10行数据
+head(trip$TRPMILES, 10) 
+
+# 统计原始取值种类
+n_distinct(trip$TRPMILES) 
+
+# 生成专门用于质量审计的数据
+trip_audit <- trip %>%
+  mutate(
+    miles = parse_double(TRPMILES)
+  )
+
+# 查看转换后类型
+class(trip_audit$miles)
+
+# 查看数值摘要
+summary(trip_audit$miles)
+
+```
+
+## 7.2 统计缺失、负数、零值和正值
+```{r trip_distance_status}
+# ==================================================
+# Step 7.2 按数值类型进行全面检查
+# ==================================================
+
+trip_audit <- trip_audit %>%
+  mutate(
+    distance_status = case_when(
+      is.na(TRPMILES) ~ "01_Raw missing",
+
+      str_trim(TRPMILES) == "" ~ "02_Blank",
+
+      is.na(miles) ~ "03_Parse failure",
+
+      !is.finite(miles) ~ "04_Non-finite",
+
+      miles < 0 ~ "05_Negative",
+
+      miles == 0 ~ "06_Zero",
+
+      miles > 0 ~ "07_Positive",
+
+      TRUE ~ "08_Other"
+    )
+  )
+
+# 汇总每种类型的记录数
+distance_status_table <- trip_audit %>%
+  count(distance_status, name = "n") %>%
+  mutate(
+    percentage = round(
+      n / sum(n) * 100,
+      2
+    )
+  )
+
+print(distance_status_table)
+
+# 检查分类是否覆盖全部记录
+stopifnot(
+  sum(distance_status_table$n) == nrow(trip_audit)
+)
+
+# 列出全部负数编码及出现次数
+trip_audit %>%
+  filter(distance_status == "05_Negative") %>%
+  count(TRPMILES, sort = TRUE)
+
+trip_audit %>%
+  filter(
+    distance_status %in% c(
+      "02_Blank",
+      "03_Parse failure",
+      "04_Non-finite"
+    )
+  ) %>%
+  count(TRPMILES, distance_status)
+
+```
+## 7.3 计算完整的距离描述性统计
+```{r trip_distance_summary}
+trip_nonnegative <- trip_audit %>%
+  filter(
+    is.finite(miles),
+    miles >= 0
+  )
+
+distance_summary <- trip_nonnegative %>%
+  summarise(
+    n = n(),
+
+    minimum = min(miles),
+
+    maximum = max(miles),
+
+    mean = mean(miles),
+
+    median = median(miles),
+
+    sd = sd(miles),
+
+    variance = var(miles),
+
+    q01 = quantile(miles, 0.01),
+
+    q05 = quantile(miles, 0.05),
+
+    q25 = quantile(miles, 0.25),
+
+    q75 = quantile(miles, 0.75),
+
+    q90 = quantile(miles, 0.90),
+
+    q95 = quantile(miles, 0.95),
+
+    q99 = quantile(miles, 0.99)
+  )
+
+print(distance_summary)
+
+# Mean 与 Median 的差异。
+# 如果均值远大于中位数，往往意味着数据右偏，少量长距离行程对均值产生较大影响。
+
+quantile(
+  trip_nonnegative$miles,
+  probs = c(
+    0,
+    0.01,
+    0.05,
+    0.10,
+    0.25,
+    0.50,
+    0.75,
+    0.90,
+    0.95,
+    0.99,
+    0.999,
+    1
+  )
+)
+
+
+```
+
+## 7.4 绘制出行距离分布图
+
+图 1：完整非负距离分布
+```{r trip_distance_histogram}
+
+# ==================================================
+# Step 7.4 数据可视化
+# ==================================================
+
+ggplot(
+  trip_nonnegative,
+  aes(x = miles)
+) +
+  geom_histogram(
+    bins = 60,
+    fill = "steelblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Distribution of Recorded Trip Distance",
+    x = "Trip Distance (miles)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+```
+
+图 2：短距离区域的细节
+```{r trip_distance_histogram_zoom}
+ggplot(
+  trip_nonnegative,
+  aes(x = miles)
+) +
+  geom_histogram(
+    binwidth = 2,
+    boundary = 0,
+    fill = "steelblue",
+    color = "white"
+  ) +
+  coord_cartesian(
+    xlim = c(0, 100)
+  ) +
+  labs(
+    title = "Trip Distance Distribution: 0–100 Miles",
+    x = "Trip Distance (miles)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+图 3：对数尺度的距离分布
+```{r trip_distance_histogram_log}
+ggplot(
+  trip_nonnegative,
+  aes(x = log1p(miles))
+) +
+  geom_histogram(
+    bins = 60,
+    fill = "steelblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Log-transformed Trip Distance",
+    x = "log(1 + Trip Distance)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+
+
+## 7.5 检查极端距离及跨字段合理性
+
+查看距离最大的记录
+```{r trip_distance_extreme}
+# ==================================================
+# Step 7.5 极端观测及一致性核查
+# ==================================================
+
+trip_nonnegative %>%
+  arrange(desc(miles)) %>%
+  select(
+    HOUSEID,
+    PERSONID,
+    TRIPID,
+    TRPMILES,
+    TRVLCMIN,
+    TRIPMODE
+  ) %>%
+  slice_head(n = 20)
+
+```
+
+查看零距离记录
+```{r trip_distance_zero}
+trip_audit %>%
+  filter(
+    distance_status == "06_Zero"
+  ) %>%
+  select(
+    HOUSEID,
+    PERSONID,
+    TRIPID,
+    TRPMILES,
+    TRVLCMIN,
+    TRIPMODE
+  ) %>%
+  slice_head(n = 20)
+
+# 首先将行程时间转换成数值：
+
+trip_audit <- trip_audit %>%
+  mutate(
+    travel_minutes = parse_double(TRVLCMIN)
+  )
+
+
+# 接下来检查“距离为正，但记录的出行时间为 0”的行程：
+trip_audit %>%
+  filter(
+    is.finite(miles),
+    miles > 0,
+    is.finite(travel_minutes),
+    travel_minutes == 0
+  ) %>%
+  select(
+    HOUSEID,
+    PERSONID,
+    TRIPID,
+    miles,
+    travel_minutes,
+    TRIPMODE
+  )
+
+# 利用速度辅助识别可疑记录
+
+trip_audit <- trip_audit %>%
+  mutate(
+    speed_mph = case_when(
+      is.finite(miles) &
+        miles >= 0 &
+        is.finite(travel_minutes) &
+        travel_minutes > 0 ~
+          miles / (travel_minutes / 60),
+
+      TRUE ~ NA_real_
+    )
+  )
+
+# 查看计算出的最高速度
+trip_audit %>%
+  filter(is.finite(speed_mph)) %>%
+  arrange(desc(speed_mph)) %>%
+  select(
+    HOUSEID,
+    PERSONID,
+    TRIPID,
+    miles,
+    travel_minutes,
+    speed_mph,
+    TRIPMODE
+  ) %>%
+  slice_head(n = 20)
+
+```
+
+
+
+
+
+## 7.6 核对 Codebook，确定清洗规则
+```{r }
+
+```

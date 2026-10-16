@@ -1,0 +1,404 @@
+---
+title: "Residential Population Density and Daily Travel Distance in the United States
+  A Cross-Sectional Regression Analysis of Nonlinearity and Heterogeneity"
+output: html_document
+date: "2026-10-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# Step 3: Set up the RStudio environment
+
+## 1.set up RStudio Project
+Create a new RStudio Project in the URBAN5127_NHTS folder. Name it `URBAN5127_NHTS`.
+
+organize the project folder structure
+```
+URBAN5127_NHTS/
+│
+├── URBAN5127_NHTS.Rproj
+│
+├── data/
+│ ├── raw/
+│ │ ├── perv2pub.csv
+│ │ ├── tripv2pub.csv
+│ │ ├── hhv2pub.csv
+│ │ ├── vehv2pub.csv
+│ │ └── ldtv2pub.csv
+│ │
+│ └── processed/
+│
+├── R/
+│ └── 02_data_cleaning.R
+│
+├── figures/
+└── tables/
+```
+
+## 2. create a new R Markdown file
+Create a new R Markdown file in the R folder. Name it `URBAN5127_NHTS.Rmd`.
+
+## 3.install and load required packages
+first, install the `tidyverse` package if you haven't already. Then, load the package in your R Markdown file.
+```{r install_and_load_packages, eval=FALSE}
+install.packages("tidyverse") # install tidyverse package if not already installed
+library(tidyverse) # load tidyverse package
+```
+
+## 4. get the current working directory
+```{r check_working_directory}
+getwd() # check the current working directory
+```
+The output should point to the root directory of your URBAN5127_NHTS project.
+Avoid repeatedly using setwd() in the code to set an absolute path on your computer. Using an RStudio Project and relative paths will make it easier to reproduce the analysis in Quarto later.
+
+# Step 6: Import data and check variable types
+
+```{r import_data}
+stopifnot(file.exists("data/raw/perv2pub.csv"), file.exists("data/raw/tripv2pub.csv"), file.exists("data/raw/hhv2pub.csv"), file.exists("data/raw/vehv2pub.csv"), file.exists("data/raw/ldtv2pub.csv")) # Check that the data files exist
+
+# Read person-level and trip-level data
+person <- read_csv("data/raw/perv2pub.csv", col_types = cols(.default = col_character()), show_col_types = FALSE)
+trip <- read_csv("data/raw/tripv2pub.csv", col_types = cols(.default = col_character()), show_col_types = FALSE)
+
+# Check the data dimensions
+dim(person)
+dim(trip)
+
+# Inspect the column structures
+glimpse(person)
+glimpse(trip)
+
+# Check that the required variables are present
+required_person <- c("HOUSEID", "PERSONID", "R_AGE", "HTPPOPDN", "CNTTDTR", "WORKER", "HHSIZE", "HHVEHCNT", "TRAVDAY", "TDAYDATE", "WTPERFIN")
+required_trip <- c("HOUSEID", "PERSONID", "TRIPID", "TRPMILES")
+
+# The stopifnot() function checks whether conditions are TRUE; if not, it raises an error and stops execution.
+stopifnot(all(required_person %in% names(person)), all(required_trip %in% names(trip)))
+```
+
+# Step 7: Check for anomalous codes in trip distances
+
+```{r check_trip_distance}
+# mean(c(2, 5, -9))
+
+# ==================================================
+# Step 7: Check trip distances
+# ==================================================
+
+trip <- trip %>% mutate( miles = parse_double(TRPMILES) )
+
+# Overall data summary
+summary(trip$miles)
+
+# Check the original codes
+trip %>% count(TRPMILES, sort = TRUE)
+
+# Count anomalous codes
+trip %>% summarise( total_trips = n(), missing_value = sum(is.na(miles)), negative_distance = sum( miles < 0, na.rm = TRUE ), zero_distance = sum( miles == 0, na.rm = TRUE ), valid_distance = sum( is.finite(miles) & miles >= 0 ) )
+
+# Inspect the specific codes for negative values
+trip %>% filter(miles < 0) %>% count(TRPMILES)
+```
+
+# Step 8: Check primary keys and count trips per person
+```{r check_primary_key}
+# ==================================================
+# Step 8: Validate data primary keys
+# ==================================================
+
+# Person table: one row per person
+anyDuplicated( person[c("HOUSEID", "PERSONID")])
+
+# Trip table: each person may have multiple trips
+# However, the composite key for each trip should be unique
+anyDuplicated( trip[c("HOUSEID", "PERSONID", "TRIPID")])
+
+# Check for trips that cannot be matched to a person
+unmatched_trips <- trip %>% anti_join( person, by = c("HOUSEID", "PERSONID") )
+
+nrow(unmatched_trips)
+
+# Count the number of trips per person
+trip_counts <- trip %>% group_by(HOUSEID, PERSONID) %>% summarise( n_trips = n(), .groups = "drop" )
+
+# View the results
+head(trip_counts)
+
+# Number of unique respondents with trip records
+nrow(trip_counts)
+```
+
+# Step 9: Calculate the average trip distance per person
+```{r calculate_average_trip_distance}
+# ==================================================
+# Step 9: Calculate the average trip distance per person
+# ==================================================
+
+trip_summary <- trip %>% group_by(HOUSEID, PERSONID) %>% summarise( # Number of trips for this person n_trips = n(),  # Check whether all recorded trip distances are valid all_distances_valid = all( is.finite(miles) & miles >= 0 ),  # Calculate the mean only if all distances are valid mean_trip_miles = if (all_distances_valid) { mean(miles) } else { NA_real_ }, .groups = "drop" )
+
+# Inspect the newly created summary table
+glimpse(trip_summary)
+
+# Check the results
+trip_summary %>% summarise( n_persons = n(), invalid_persons = sum(!all_distances_valid), valid_persons = sum(all_distances_valid), zero_mean = sum( mean_trip_miles == 0, na.rm = TRUE ) )
+```
+# Step 10: Join the trip summary to the person table
+```{r join_trip_summary_to_person}
+# ==================================================
+# Step 10: Join person-level and trip summary data
+# ==================================================
+
+person_day <- person %>% left_join( trip_summary, by = c("HOUSEID", "PERSONID"), relationship = "one-to-one" )
+
+# Confirm that the join neither added nor dropped any people
+nrow(person_day)
+nrow(person)
+
+stopifnot( nrow(person_day) == nrow(person))
+
+# Inspect a sample of records
+person_day %>% select( HOUSEID, PERSONID, R_AGE, HTPPOPDN, n_trips, mean_trip_miles ) %>% head(10)
+```
+
+# Step 11: Check that the two tables are correctly linked
+```{r check_joined_data}
+# ==================================================
+# Step 11: Check the consistency of trip counts
+# ==================================================
+
+person_day <- person_day %>% mutate( reported_trips = parse_integer(CNTTDTR), recorded_trips = coalesce( n_trips, 0L ) )
+
+# Respondents with inconsistent trip counts
+mismatch <- person_day %>% filter( is.na(reported_trips) | recorded_trips != reported_trips )
+
+# Count respondents with inconsistent trip counts
+nrow(mismatch)
+
+# Count people with no trips
+person_day %>% summarise( all_persons = n(), with_trips = sum(recorded_trips > 0), without_trips = sum(recorded_trips == 0) )
+```
+
+# Step 12: Filter for adults aged 18 and older
+```{r filter_adults}
+# ==================================================
+# Step 12: Filter for adults
+# ==================================================
+
+person_day <- person_day %>% mutate( age = parse_double(R_AGE) )
+
+# Check the age distribution
+summary(person_day$age)
+
+# Check for missing ages
+sum(is.na(person_day$age))
+
+# Filter for people aged 18 and older
+adult <- person_day %>% filter(age >= 18)
+
+# Count the remaining people
+nrow(adult)
+```
+
+# Step 13: Filter for adults with trip records on the survey day
+```{r filter_adults_with_trips} 
+# ==================================================
+# Step 13: Filter for adults with trips
+# ==================================================
+
+# First, count people with and without trips
+adult %>% count( has_trip = recorded_trips > 0 )
+
+# Keep only people with trip records
+traveller <- adult %>% filter(recorded_trips > 0)
+
+nrow(traveller)
+```
+
+# Step 14: Exclude adults with invalid trip distances
+```{r filter_adults_with_valid_distance}
+# ==================================================
+# Step 14: Exclude people with invalid distances
+# ==================================================
+
+# First, count people with invalid distances
+traveller %>% count(all_distances_valid)
+
+# Keep people whose trip distances are all valid
+complete_distance <- traveller %>% filter(all_distances_valid)
+
+nrow(complete_distance)
+
+# Check again whether the average distance is valid
+sum( is.na(complete_distance$mean_trip_miles))
+```
+
+# Step 15: Filter for valid residential population density
+```{r filter_valid_pop_density}
+# ==================================================
+# Step 15: Filter for valid population density
+# ==================================================
+
+# Inspect the distribution of the original population density codes
+complete_distance %>% count(HTPPOPDN, sort = TRUE)
+
+# Define the eight valid category codes
+valid_density_codes <- sprintf( "%02d", 1:8)
+
+valid_density_codes
+
+# Filter for valid population density
+known_density <- complete_distance %>% filter( HTPPOPDN %in% valid_density_codes )
+
+nrow(known_density)
+```
+
+# Step 16: Check control variables and survey weights
+```{r check_control_variables_and_weights}
+# ==================================================
+# Step 16: Check and clean the core control variables
+# ==================================================
+
+known_density <- known_density %>% mutate( hh_size = parse_double(HHSIZE), vehicles = parse_double(HHVEHCNT), person_weight = parse_double(WTPERFIN) )
+
+# Distribution of employment status
+known_density %>% count(WORKER)
+
+# Household size
+summary(known_density$hh_size)
+
+# Number of vehicles in the household
+summary(known_density$vehicles)
+
+# Day of the week of the survey
+known_density %>% count(TRAVDAY)
+
+# Person-level survey weights
+summary(known_density$person_weight)
+
+# Check the regional control variable
+known_density %>% count(CENSUS_R)
+
+# Check the survey date
+known_density %>% count(TDAYDATE)
+
+# Apply the final filters
+analysis_data <- known_density %>% filter( WORKER %in% c("01", "02"), hh_size > 0, vehicles >= 0, TRAVDAY %in% sprintf("%02d", 1:7), is.finite(person_weight), person_weight > 0 )
+
+nrow(analysis_data)
+```
+
+# Step 17: Construct and recode variables
+```{r finalize_variables}
+# ==================================================
+# Step 17: Recode variables
+# ==================================================
+
+analysis_data <- analysis_data %>% mutate( # 1. Key independent variable: tract population density density_band = factor( HTPPOPDN, levels = sprintf("%02d", 1:8) ),  # 2. Employment status worker = factor( WORKER, levels = c("01", "02"), labels = c("worker", "not_worker") ),  # 3. Household vehicle groups car_group = factor( case_when( vehicles == 0 ~ "0", vehicles == 1 ~ "1", vehicles >= 2 ~ "2+" ), levels = c("0", "1", "2+") ),  # 4. Day of the week of the survey day_of_week = factor( TRAVDAY, levels = sprintf("%02d", 1:7), labels = c( "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ) ),  # 5. Survey period survey_period = factor(TDAYDATE),  # 6. Census region census_region = factor(CENSUS_R),  # 7. Convert miles to kilometers mean_trip_km = mean_trip_miles * 1.609344,  # 8. Precompute the log-transformed version log_mean_trip = log1p(mean_trip_miles) )
+```
+
+
+# Step 18: Final quality checks
+1. Check the number of records and households
+```{r final_quality_check}
+# ==================================================
+# Final check A: Sample size
+# ==================================================
+
+nrow(analysis_data)
+
+n_distinct(analysis_data$HOUSEID)
+
+n_distinct( analysis_data$HOUSEID, analysis_data$PERSONID)
+
+# Check for duplicate records for the same person
+anyDuplicated( analysis_data[c("HOUSEID", "PERSONID")])
+```
+
+2. Check that the outcome variable is valid
+```{r final_quality_check_response_variable}
+# ==================================================
+# Final check B: Outcome variable
+# ==================================================
+
+summary(analysis_data$mean_trip_miles)
+
+sum(is.na(analysis_data$mean_trip_miles))
+
+sum(analysis_data$mean_trip_miles < 0)
+
+sum(analysis_data$mean_trip_miles == 0)
+
+quantile( analysis_data$mean_trip_miles, probs = c(0.25, 0.5, 0.75, 0.95, 0.99), na.rm = TRUE)
+```
+
+3. Check whether the population density sample is reasonably distributed
+```{r final_quality_check_density_distribution}
+# ==================================================
+# Final check C: Population density
+# ==================================================
+
+analysis_data %>% group_by(density_band) %>% summarise( persons = n(), households = n_distinct(HOUSEID), .groups = "drop" )
+```
+
+4. Check group support for the interaction between population density and vehicle count
+```{r final_quality_check_density_car_interaction}
+# ==================================================
+# Final check D: Feasibility of the interaction analysis
+# ==================================================
+
+analysis_data %>% count( density_band, car_group ) %>% pivot_wider( names_from = car_group, values_from = n, values_fill = 0 )
+```
+# Step 19: Create a sample selection flow table
+```{r sample_selection_flow_chart}
+# ==================================================
+# Final check E: Sample selection flow
+# ==================================================
+
+sample_flow <- tibble( step = c( "All respondents", "Adults aged 18+", "Adult travellers", "Complete trip distances", "Valid population density", "Valid core covariates" ), remaining_n = c( nrow(person), nrow(adult), nrow(traveller), nrow(complete_distance), nrow(known_density), nrow(analysis_data) )) %>% mutate( excluded_n = lag( remaining_n, default = first(remaining_n) ) - remaining_n, retained_percent = round( 100 * remaining_n / first(remaining_n), 2 ) )
+
+print(sample_flow)
+```
+
+# Step 20: Save the cleaned data
+```{r save_cleaned_data}
+# ==================================================
+# Save the results
+# ==================================================
+
+# Create the processed directory if it does not exist
+dir.create( "data/processed", recursive = TRUE, showWarnings = FALSE)
+
+dir.create( "tables", recursive = TRUE, showWarnings = FALSE)
+
+# Save in native R data format
+saveRDS( analysis_data, "data/processed/analysis_data.rds")
+
+# Also save as CSV for easier manual inspection
+write_csv( analysis_data, "data/processed/analysis_data.csv")
+
+# Save the sample selection table
+write_csv( sample_flow, "tables/sample_flow.csv")
+```

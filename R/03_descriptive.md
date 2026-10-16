@@ -1,0 +1,1631 @@
+# URBAN5127｜第三阶段：描述性统计与探索性数据分析（EDA）
+
+详细实操教程 · 步骤 18–22 · RStudio + NHTS 2022
+
+第三阶段是在第二阶段完成数据清洗的基础上，正式开始统计分析与数据可视化。
+
+这一阶段非常重要，因为它直接对应课程 Lecture 3、Lecture 4 和 Lecture 5，而且可以完成 Formative Research Proposal 中要求的主要数据分析内容。
+
+本次仍然严格采用你选择的 31 号研究方案，不改变因变量、研究对象或人口密度指标。
+
+本阶段研究数据
+
+初步有效样本
+
+# 9,052
+
+成年出行者
+
+不同家庭
+
+# 6,113
+
+家庭聚类后续处理
+
+因变量 Y： `mean_trip_miles`（个人在调查日的平均每次行程距离）。
+
+核心自变量 X： `density_band`（居住地 Census Tract 的八档人口密度）。
+
+其他变量： `age`、`worker`、`hh_size`、`car_group`、`day_of_week`、`person_weight` 等。
+
+## 一、第三阶段需要完成什么？
+
+建议完成 5 个主要步骤、12 项具体分析任务。
+
+| 步骤 | 任务       | 具体操作                                 | 产出             |
+| -- | -------- | ------------------------------------ | -------------- |
+| 18 | 总体描述性统计  | 18.1 因变量统计；18.2 连续控制变量统计；18.3 分类变量频数 | Table 1        |
+| 19 | 人口密度分组统计 | 19.1 密度样本量；19.2 各组出行距离；19.3 零距离比例    | Table 2        |
+| 20 | 因变量分布分析  | 20.1 原始直方图；20.2 局部放大；20.3 对数分布       | Figure 1       |
+| 21 | 核心双变量关系  | 21.1 密度分组箱线图；21.2 分组均值和中位数比较         | Figure 2       |
+| 22 | 多变量探索分析  | 22.1 工作状态；22.2 车辆数；22.3 调查星期及交叉样本检查  | Figure 3–4、辅助表 |
+
+### 第三阶段与后面回归有什么区别？
+
+| 第三阶段：描述性分析        | 第四阶段：回归分析        |
+| ----------------- | ---------------- |
+| 不控制其他变量时，组间有什么差异？ | 控制其他变量后，关联是否还存在？ |
+| 出行距离是否右偏？         | 这种分布是否影响模型设定和诊断？ |
+| 哪些密度组的样本量较少？      | 模型中的系数估计是否稳定？    |
+| 工作状态不同的群体是否表现不同？  | 交互项是否具有统计意义？     |
+
+本阶段不做 t 检验、ANOVA、OLS、RESET 或 BP 检验。 这些会在后续阶段系统开展。
+
+## 二、开始之前：建立新的 R 脚本
+
+第二阶段已经生成：
+
+`data/processed/analysis_data.rds`
+
+第三阶段直接读取它，不再重新导入和连接五张原始表。
+
+### 1. 建议的项目结构
+
+```
+URBAN5127_NHTS/
+│
+├── data/
+│   ├── raw/
+│   └── processed/
+│       ├── analysis_data.rds
+│       └── analysis_data.csv
+│
+├── R/
+│   ├── 02_data_cleaning.R
+│   └── 03_descriptive_eda.R    ← 本次使用
+│
+├── figures/
+├── tables/
+│
+├── formative.qmd
+└── summative.qmd
+```
+
+在 RStudio 中创建新脚本：
+
+`File → New File → R Script`
+
+保存为：
+
+`R/03_descriptive_eda.R`
+
+### 2. 加载 R 包及分析数据
+
+将下面代码放在脚本最上方：
+
+```{r load_packages_and_data}
+# =====================================================
+# URBAN5127 - Stage 3
+# Descriptive Statistics and EDA
+# 2022 NextGen NHTS
+# =====================================================
+
+library(tidyverse)
+
+# 创建结果输出目录
+dir.create(
+  "figures",
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+dir.create(
+  "tables",
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+# 读取第二阶段清洗后的数据
+analysis_data <- readRDS(
+  "data/processed/analysis_data.rds"
+)
+
+# 查看数据结构
+dim(analysis_data)
+glimpse(analysis_data)
+
+# 检查样本量
+nrow(analysis_data)
+
+# 检查家庭数量
+n_distinct(analysis_data$HOUSEID)
+
+# 检查是否存在重复个人
+anyDuplicated(
+  analysis_data[c("HOUSEID", "PERSONID")]
+)
+```
+
+按照 31 号文件的同一筛选口径，预期得到：
+
+| 指标      | 预期结果  |
+| ------- | ----- |
+| 个人记录数   | 9,052 |
+| 家庭数     | 6,113 |
+| 个人主键重复数 | 0     |
+
+### 3. 再检查一次核心变量
+
+虽然第二阶段已经进行过数据清洗，但分析前仍建议设置质量检查。
+
+```{r check_core_variables}
+# 检查关键字段是否存在
+required_vars <- c(
+  "HOUSEID",
+  "PERSONID",
+  "mean_trip_miles",
+  "density_band",
+  "age",
+  "worker",
+  "hh_size",
+  "car_group",
+  "day_of_week",
+  "person_weight"
+)
+
+stopifnot(
+  all(required_vars %in% names(analysis_data))
+)
+
+# 检查因变量
+stopifnot(
+  all(is.finite(analysis_data$mean_trip_miles)),
+  all(analysis_data$mean_trip_miles >= 0),
+  !anyNA(analysis_data$density_band)
+)
+```
+
+`stopifnot()` 的作用是设置必须满足的条件。如果条件不成立，代码停止运行，提醒你检查上一步的问题。
+
+这可以防止错误数据一路进入后面的统计分析。
+
+# 三、步骤 18：总体描述性统计
+
+对应 Lecture 3 — Descriptive Statistics
+
+这一阶段首先回答：
+
+我们的研究样本有什么特征？平均出行距离是多少？数据主要集中在哪个范围？
+
+建议分为三个子任务。
+
+## 18.1 描述因变量 `mean_trip_miles`
+
+这是第三阶段最重要的第一个操作。
+
+### 需要计算哪些指标？
+
+| 统计量       | 英文                 | R 函数           | 研究意义            |
+| --------- | ------------------ | -------------- | --------------- |
+| 样本量       | Sample Size        | `n()`          | 有多少名成年出行者       |
+| 平均数       | Mean               | `mean()`       | 平均每人每次行程距离的样本均值 |
+| 中位数       | Median             | `median()`     | 典型受访者的平均行程距离    |
+| 标准差       | Standard Deviation | `sd()`         | 个体之间的距离差异       |
+| 最小值       | Minimum            | `min()`        | 样本最短平均行程距离      |
+| 第 25 百分位数 | Q1                 | `quantile()`   | 较短距离人群的分布位置     |
+| 第 75 百分位数 | Q3                 | `quantile()`   | 较长距离人群的分布位置     |
+| 第 95 百分位数 | P95                | `quantile()`   | 观察分布长尾          |
+| 第 99 百分位数 | P99                | `quantile()`   | 检查极端高距离         |
+| 最大值       | Maximum            | `max()`        | 样本最大平均行程距离      |
+| 零距离比例     | Zero share         | `mean(x == 0)` | 识别零值结构          |
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 18.1: 因变量描述性统计
+# =====================================================
+
+y_summary <- analysis_data %>%
+  summarise(
+    n = n(),
+
+    households = n_distinct(HOUSEID),
+
+    mean_miles = mean(mean_trip_miles),
+
+    median_miles = median(mean_trip_miles),
+
+    sd_miles = sd(mean_trip_miles),
+
+    min_miles = min(mean_trip_miles),
+
+    q1_miles = quantile(
+      mean_trip_miles, 0.25
+    ),
+
+    q3_miles = quantile(
+      mean_trip_miles, 0.75
+    ),
+
+    p95_miles = quantile(
+      mean_trip_miles, 0.95
+    ),
+
+    p99_miles = quantile(
+      mean_trip_miles, 0.99
+    ),
+
+    max_miles = max(mean_trip_miles),
+
+    zero_n = sum(mean_trip_miles == 0),
+
+    zero_pct = 100 * mean(
+      mean_trip_miles == 0
+    )
+  )
+
+print(y_summary, width = Inf)
+```
+
+### 重点函数讲解
+
+`mean()` 与 `median()`
+
+假设五个人的平均行程距离分别为：
+
+`2, 3, 4, 6, 100`
+
+平均数：
+
+\\[ \bar{x}=\frac{2+3+4+6+100}{5}=23 \\]
+
+中位数：
+
+\\[ Median=4 \\]
+
+这两者差异很大，因为平均数受到 100 这个极端值的明显影响。
+
+你的 NHTS 数据存在很长的右尾，因此不应仅报告平均数，必须同时报告中位数和分位数。
+
+`sd()`
+
+标准差描述观测值相对于平均数的离散程度。若标准差较大，意味着受访者之间的行程距离差异较大。
+
+但对于高度右偏的数据，标准差也容易受极端观测影响，因此应结合 IQR（四分位距）理解。
+
+`quantile()`
+
+例如：
+
+```
+quantile(
+  analysis_data$mean_trip_miles,
+  probs = c(0.25, 0.5, 0.75, 0.95, 0.99)
+)
+```
+
+它返回五个位置的分位数。
+
+其中 P95 表示约 95% 的观测不超过该距离，而不是表示 95% 的人恰好走了这么远。
+
+### 如何核对结果？
+
+31 号文件已经核实了部分结果：
+
+| 统计量         | 预期值              |
+| ----------- | ---------------- |
+| 样本数         | 9,052            |
+| 中位数         | 约 5.57 miles     |
+| P95         | 约 48.54 miles    |
+| P99         | 约 285.37 miles   |
+| 最大值         | 约 2,435.91 miles |
+| 平均距离为 0 的人数 | 49               |
+
+这里不预先填写平均数和标准差，因为应以你实际运行后的输出为准。
+
+如果输出与这些已核验的数值差异明显，首先回到第二阶段核对样本筛选、`TRPMILES` 处理和平均值计算方式。
+
+### 需要得出什么结论？
+
+此时先不要写“人口密度越高，出行距离越短”。
+
+目前只能讨论因变量本身的分布，例如是否具有右偏、极端值，平均数是否明显高于中位数，以及分布长尾可能怎样影响后续 OLS 模型。
+
+## 18.2 对其他连续变量进行描述性统计
+
+除了因变量，论文还要说明研究样本的基本特征。
+
+这一步建议分析：
+
+`age`：年龄；
+
+`hh_size`：家庭人数；
+
+`vehicles`：家庭拥有的车辆数。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 18.2: 连续变量描述统计
+# =====================================================
+
+continuous_summary <- analysis_data %>%
+  select(
+    mean_trip_miles,
+    age,
+    hh_size,
+    vehicles
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  group_by(variable) %>%
+  summarise(
+    n = sum(!is.na(value)),
+
+    mean = mean(value, na.rm = TRUE),
+
+    sd = sd(value, na.rm = TRUE),
+
+    median = median(value, na.rm = TRUE),
+
+    q1 = quantile(
+      value, 0.25, na.rm = TRUE
+    ),
+
+    q3 = quantile(
+      value, 0.75, na.rm = TRUE
+    ),
+
+    min = min(value, na.rm = TRUE),
+
+    max = max(value, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+print(continuous_summary)
+```
+
+### 这段代码是如何工作的？
+
+原来的数据结构大致为：
+
+| PERSONID | mean_trip_miles | age | hh_size | vehicles |
+| -------- | --------------- | --- | ------- | -------- |
+| 01       | 5.5             | 25  | 2       | 1        |
+| 02       | 10.2            | 42  | 4       | 2        |
+
+`pivot_longer()` 把原来的多个数值列转换成长表：
+
+| variable        | value |
+| --------------- | ----- |
+| mean_trip_miles | 5.5   |
+| age             | 25    |
+| hh_size         | 2     |
+| vehicles        | 1     |
+
+这样就可以使用一次 `group_by(variable)` 和 `summarise()`，分别计算每个变量的统计结果。
+
+### 为什么需要这张表？
+
+如果后面你发现年龄与出行距离具有显著关联，需要先知道样本中年龄的范围和分布。
+
+如果车辆数主要集中在 1–2 辆，也需要提前了解车辆类别是否有足够观测值。
+
+这能为后面选择连续变量、分类变量、平方项和交互项提供依据。
+
+## 18.3 分类变量频数与比例
+
+本研究涉及多个分类变量，尤其是人口密度、工作状态、家庭车辆分组和调查星期。
+
+### R 代码：工作状态
+
+```
+worker_summary <- analysis_data %>%
+  count(worker) %>%
+  mutate(
+    percentage = 100 * n / sum(n)
+  )
+
+print(worker_summary)
+```
+
+### R 代码：车辆拥有情况
+
+```
+car_summary <- analysis_data %>%
+  count(car_group) %>%
+  mutate(
+    percentage = 100 * n / sum(n)
+  )
+
+print(car_summary)
+```
+
+### R 代码：调查星期
+
+```
+day_summary <- analysis_data %>%
+  count(day_of_week) %>%
+  mutate(
+    percentage = 100 * n / sum(n)
+  )
+
+print(day_summary)
+```
+
+这里 `count()` 计算每个类别有多少条记录。
+
+`n / sum(n)` 计算每个类别在当前分析样本中的占比。
+
+例如某类有 2,000 人，全部样本有 9,052 人，则：
+
+\\[ Percentage=\frac{2000}{9052}\times100\\% \\]
+
+需要注意：目前这些比例均为未加权样本比例，不能未经说明就解释为美国所有成年出行者的总体比例。
+
+### 步骤 18 的成果
+
+完成后，应保存以下三个数据对象：
+
+`y_summary`、`continuous_summary`、`worker_summary` 等分类变量统计。
+
+其中总体描述统计可以整理成最终论文的 Table 1: Descriptive Statistics of the Study Sample。
+
+# 四、步骤 19：按人口密度分组进行统计
+
+对应 Lecture 3 · `group_by()`、`summarise()`、`quantile()`
+
+步骤 18 描述了整个研究样本。现在开始分析核心问题：
+
+居住在不同人口密度地区的成年出行者，其平均每次行程距离是否存在差异？
+
+注意，此时观察的是未经控制变量调整的描述性差异。
+
+## 19.1 检查八个人口密度组的样本数量
+
+首先明确各人口密度编码的实际含义。
+
+| 密度代码 | Census Tract 人口密度（人/平方英里） | 31 号文件核验人数 |
+| ---- | ------------------------- | ---------- |
+| `01` | 0–99                      | 1,139      |
+| `02` | 100–499                   | 1,330      |
+| `03` | 500–999                   | 772        |
+| `04` | 1,000–1,999               | 1,272      |
+| `05` | 2,000–3,999               | 1,916      |
+| `06` | 4,000–9,999               | 1,920      |
+| `07` | 10,000–24,999             | 438        |
+| `08` | 25,000–999,999            | 265        |
+
+各密度组的人数并不相等，这意味着某些组的统计结果可能比其他组更不稳定。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 19.1: 人口密度类别频数统计
+# =====================================================
+
+density_count <- analysis_data %>%
+  count(density_band, name = "persons") %>%
+  mutate(
+    percentage = 100 * persons / sum(persons)
+  )
+
+print(density_count)
+
+# 检查人数合计
+sum(density_count$persons)
+
+# 检查各组是否达到预期人数
+expected_count <- c(
+  1139, 1330, 772, 1272,
+  1916, 1920, 438, 265
+)
+
+data.frame(
+  density_band = density_count$density_band,
+  actual = density_count$persons,
+  expected = expected_count,
+  difference = density_count$persons - expected_count
+)
+```
+
+预期 `difference` 全部为 0。
+
+如果不是 0，先检查第二阶段是否使用了完全相同的成年人、出行者、无效距离及人口密度筛选规则。
+
+### 为什么检查每组人数？
+
+这是为了判断后续模型分析是否有足够的数据支持。
+
+例如八个密度组的主效应可以分别估计，但如果再把它们与车辆拥有情况进行交叉分类，某些单元格可能只剩很少的样本。
+
+所以不能只凭总样本 9,052 人就判断所有复杂模型都可靠。
+
+## 19.2 计算不同人口密度组的出行距离
+
+现在对八个密度组分别计算平均行程距离、中位数、标准差和分位数。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 19.2: 不同人口密度组的出行距离
+# =====================================================
+
+density_summary <- analysis_data %>%
+  group_by(density_band) %>%
+  summarise(
+    # 样本人数
+    persons = n(),
+
+    # 来自多少个家庭
+    households = n_distinct(HOUSEID),
+
+    # 平均行程距离
+    mean_miles = mean(mean_trip_miles),
+
+    # 中位数
+    median_miles = median(mean_trip_miles),
+
+    # 标准差
+    sd_miles = sd(mean_trip_miles),
+
+    # 第25百分位数
+    q1_miles = quantile(
+      mean_trip_miles, 0.25
+    ),
+
+    # 第75百分位数
+    q3_miles = quantile(
+      mean_trip_miles, 0.75
+    ),
+
+    # 第95百分位数
+    p95_miles = quantile(
+      mean_trip_miles, 0.95
+    ),
+
+    # 平均距离为零的人数
+    zero_n = sum(mean_trip_miles == 0),
+
+    # 零距离比例
+    zero_pct = 100 * mean(
+      mean_trip_miles == 0
+    ),
+
+    .groups = "drop"
+  ) %>%
+  mutate(
+    sample_pct = 100 * persons / sum(persons)
+  )
+
+print(density_summary, width = Inf)
+```
+
+### 输出表应该是什么结构？
+
+| Density | Persons | Mean miles | Median miles | SD  | Zero % |
+| ------- | ------- | ---------- | ------------ | --- | ------ |
+| 01      | 1,139   | 待运行        | 待运行          | 待运行 | 待运行    |
+| 02      | 1,330   | 待运行        | 待运行          | 待运行 | 待运行    |
+| 03      | 772     | 待运行        | 待运行          | 待运行 | 待运行    |
+| 04      | 1,272   | 待运行        | 待运行          | 待运行 | 待运行    |
+| 05      | 1,916   | 待运行        | 待运行          | 待运行 | 待运行    |
+| 06      | 1,920   | 待运行        | 待运行          | 待运行 | 待运行    |
+| 07      | 438     | 待运行        | 待运行          | 待运行 | 待运行    |
+| 08      | 265     | 待运行        | 待运行          | 待运行 | 待运行    |
+
+我没有预先填写八组的出行距离，因为 31 号文件尚未提供分组结果。我们必须以你执行 R 代码得到的结果为准。
+
+### 如何分析这张表？
+
+重点比较四个方面。
+
+第一，均值是否随密度增加而降低？
+
+如果高密度组的平均值比较低，这初步支持负向关联的研究假设；如果不是，也要分析其原因，而不是强行寻找负向结果。
+
+第二，中位数是否表现出相似变化？
+
+如果均值和中位数的变化趋势不同，可能说明某些密度组受到极端长途行程较强的影响。
+
+第三，各组分布的差异是否很大？
+
+利用标准差、Q1 和 Q3 判断不同组内部的差异。
+
+第四，结果是否受到小样本组影响？
+
+最高密度档只有 265 人，相比其他组更少，因此对其均值和极端值要特别谨慎。
+
+另外，本研究计算的是“个人平均行程距离的组均值”，每名受访者贡献一个个人平均值。这不同于把某密度组所有原始行程直接混合后计算一次平均值，因为后者会使当天出行次数更多的人贡献更多行程。
+
+## 19.3 检查零距离观测在不同密度组的分布
+
+由于候选样本中有 49 人的平均行程距离为 0，这些数据会对距离分布特别是对数变换产生影响。
+
+前面的 `density_summary` 已经包含了 `zero_n` 和 `zero_pct`，可以直接提取：
+
+```{r}
+# =====================================================
+# Step 19.3: 零距离观测检查
+# =====================================================
+
+zero_by_density <- density_summary %>%
+  select(
+    density_band,
+    persons,
+    zero_n,
+    zero_pct
+  )
+
+print(zero_by_density)
+```
+
+这一步不是要根据密度决定删除零值，而是检查零值是否集中在某些人口密度类别。
+
+49 人属于有行程记录但个人平均距离为 0 的情况；我们要保留他们，同时在论文中说明这种观测结构。
+
+### 可选进阶：计算调查加权均值
+
+如果希望进一步检查加权与未加权的描述性差异，可以先计算：
+
+```
+weighted_density_summary <- analysis_data %>%
+  group_by(density_band) %>%
+  summarise(
+    unweighted_mean = mean(mean_trip_miles),
+
+    weighted_mean = weighted.mean(
+      mean_trip_miles,
+      w = person_weight
+    ),
+
+    .groups = "drop"
+  )
+
+print(weighted_density_summary)
+```
+
+这里 `weighted.mean()` 只给出加权描述性点估计，不提供完整复杂抽样设计下的标准误或置信区间。正式的调查设计型推断需要后续进一步处理。
+
+步骤 19 完成后： 应保存 `density_summary`，它将成为论文的 Table 2: Mean Trip Distance by Residential Population Density Category。
+
+# 五、步骤 20：因变量的分布可视化
+
+对应 Lecture 4 — Univariate Visualisation
+
+这一阶段主要使用 `ggplot2`。
+
+我们需要通过图形理解：平均每次行程距离是否集中在较短范围内？右尾有多长？极端观测是否影响图表可读性？
+
+建议制作三种图，选出最适合放进论文的一至两张。
+
+## 20.1 绘制原始距离直方图
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 20.1: 原始距离直方图
+# =====================================================
+
+p_hist_full <- ggplot(
+  analysis_data,
+  aes(x = mean_trip_miles)
+) +
+  geom_histogram(
+    bins = 60,
+    colour = "white"
+  ) +
+  labs(
+    title = "Distribution of Mean Trip Distance",
+    subtitle = "2022 NHTS adult travellers",
+    x = "Mean trip distance (miles)",
+    y = "Number of travellers",
+    caption = "Source: 2022 NextGen NHTS V2.1"
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_hist_full)
+```
+
+### 函数解释
+
+`ggplot()` 建立图形对象。
+
+`aes(x = mean_trip_miles)` 指定使用哪个变量作为横轴。
+
+`geom_histogram()` 绘制连续变量的频数直方图。
+
+`bins = 60` 将数据范围大致划分成 60 个区间。由于分箱边界的设置可能影响图形，应当检查不同分箱宽度下结论是否稳定。
+
+`labs()` 设置标题、坐标轴和来源说明。
+
+`theme_minimal()` 使用简洁的学术绘图主题。
+
+### 你可能观察到什么？
+
+由于样本最大值超过 2,400 英里，直接绘制完整范围的直方图时，大量较短行程可能被压缩到横轴左侧。
+
+这不是绘图程序出错，而是数据右尾很长所造成的可视化问题。
+
+## 20.2 绘制局部放大的距离分布图
+
+为了看清更常见的短距离行程，可以展示 0–60 英里的范围。
+
+```{r}
+# =====================================================
+# Step 20.2: 局部放大直方图
+# =====================================================
+
+p_hist_zoom <- ggplot(
+  analysis_data,
+  aes(x = mean_trip_miles)
+) +
+  geom_histogram(
+    binwidth = 2,
+    boundary = 0,
+    colour = "white"
+  ) +
+  coord_cartesian(
+    xlim = c(0, 60)
+  ) +
+  labs(
+    title = "Mean Trip Distance: 0–60 Miles",
+    x = "Mean trip distance (miles)",
+    y = "Number of travellers",
+    caption = paste(
+      "Display restricted to 0–60 miles.",
+      "Observations outside this range",
+      "remain in the analysis dataset."
+    )
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_hist_zoom)
+```
+
+### 为什么使用 `coord_cartesian()`？
+
+这是很容易出错的地方。
+
+`coord_cartesian(xlim = c(0, 60))` 只是控制绘图时可见的横轴范围，原始数据和完整直方图统计仍然保留。
+
+而如果你在绘图之前执行：
+
+```
+analysis_data %>%
+  filter(mean_trip_miles <= 60)
+```
+
+你就真正改变了绘图所使用的数据。
+
+两种操作回答的问题不同。
+
+本阶段只需要改善图形可读性，不应为了画出漂亮的分布图而修改主研究样本。
+
+### 统计一下显示范围之外有多少人
+
+```
+analysis_data %>%
+  summarise(
+    n_above_60 = sum(mean_trip_miles > 60),
+
+    pct_above_60 = 100 * mean(
+      mean_trip_miles > 60
+    )
+  )
+```
+
+这样可以在论文图注中透明报告图形显示范围之外的观测比例。
+
+## 20.3 对数变换后的距离分布图
+
+这是你后续开展回归诊断的重要准备。
+
+由于 `mean_trip_miles` 可以等于 0，不适合直接对所有观测取自然对数。
+
+我们使用：
+
+\\[ Y^\*=\ln(1+Y) \\]
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 20.3: log(1 + distance) 分布
+# =====================================================
+
+p_hist_log <- ggplot(
+  analysis_data,
+  aes(x = log1p(mean_trip_miles))
+) +
+  geom_histogram(
+    bins = 50,
+    colour = "white"
+  ) +
+  labs(
+    title = "Distribution of Log-Transformed Trip Distance",
+    subtitle = "Using ln(1 + miles)",
+    x = "ln(1 + mean trip distance in miles)",
+    y = "Number of travellers"
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_hist_log)
+```
+
+### 需要正确理解这张图
+
+对数变换会压缩较大的数值。
+
+例如：
+
+| 原始距离（英里） | `log1p()` |
+| -------- | --------- |
+| 0        | 0         |
+| 1        | 0.693     |
+| 5        | 1.792     |
+| 10       | 2.398     |
+| 50       | 3.932     |
+| 100      | 4.615     |
+
+因此，它可以让严重右偏的数据更容易进行统计展示。
+
+但是：
+
+对数变换之后更接近钟形，并不自动代表 OLS 的所有假设得到满足。
+
+OLS 假设涉及的是给定解释变量条件下的模型误差结构，而不是仅仅要求原始因变量或变换后的因变量呈正态分布。
+
+后续第四、第五阶段仍要进行正式模型诊断。
+
+### 保存 Figure 1
+
+```
+ggsave(
+  filename = "figures/Figure_1a_full_distribution.png",
+  plot = p_hist_full,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+ggsave(
+  filename = "figures/Figure_1b_zoomed_distribution.png",
+  plot = p_hist_zoom,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+ggsave(
+  filename = "figures/Figure_1c_log_distribution.png",
+  plot = p_hist_log,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+```
+
+最终论文不必同时放入全部三张，可以根据研究重点选择最能清楚呈现数据分布及其限制的图。
+
+# 六、步骤 21：人口密度与平均行程距离的关系
+
+对应 Lecture 5 — Bivariate Visualisation
+
+这是整个第三阶段最重要的部分，也是你 Formative Research Proposal 中的核心双变量关系图。
+
+我们的研究问题是：
+
+How does mean trip distance vary across residential population density categories?
+
+也就是：
+
+不同居住地人口密度等级的成年出行者，其平均每次行程距离如何变化？
+
+由于人口密度是八个离散类别，不能直接把类别代码 1–8 当作真实、等间距的人口密度数值。
+
+我建议制作两类图：箱线图和分组均值/中位数对比图。
+
+## 21.1 绘制人口密度与行程距离箱线图
+
+### 第一步：设置人口密度标签
+
+先将分类编码转换成更容易阅读的图表标签。
+
+注意，我们只修改图表上显示的标签，不改变原始数据中的编码。
+
+```{r}
+# =====================================================
+# Step 21.1: 设置人口密度分组标签
+# =====================================================
+
+density_labels <- c(
+  "01" = "0–99",
+  "02" = "100–499",
+  "03" = "500–999",
+  "04" = "1,000–1,999",
+  "05" = "2,000–3,999",
+  "06" = "4,000–9,999",
+  "07" = "10,000–24,999",
+  "08" = "25,000+"
+)
+```
+
+所有数字的单位都是人/平方英里。
+
+这里 `25,000+` 只是为了让图表标签简洁，原始最高类别的规定区间应以 NHTS Codebook 为准。
+
+### 第二步：绘制箱线图
+
+```{r}
+# =====================================================
+# Step 21.1: 人口密度与行程距离箱线图
+# =====================================================
+
+p_density_box <- ggplot(
+  analysis_data,
+  aes(
+    x = density_band,
+    y = mean_trip_miles
+  )
+) +
+  geom_boxplot(
+    outlier.alpha = 0.15,
+    outlier.size = 0.6
+  ) +
+  coord_cartesian(
+    ylim = c(0, 60)
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Mean Trip Distance by Residential Population Density",
+    subtitle = "Adult travellers in the 2022 NHTS",
+    x = "Population density (persons per sq. mile)",
+    y = "Mean trip distance (miles)",
+    caption = paste(
+      "Source: 2022 NextGen NHTS V2.1.",
+      "Vertical display limited to 0–60 miles."
+    )
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_density_box)
+```
+
+### 箱线图怎么看？
+
+箱线图的基本组成
+
+示意图：R 的默认箱线图通常采用 1.5×IQR 规则确定须端点；超过须端点的观测会单独标识，并不意味着这些观测一定是错误数据。
+
+### 需要重点观察什么？
+
+观察八组箱体的位置、中位数、四分位间距及离群点分布。
+
+如果较高密度组的中位数明显偏低，说明样本中这些组的典型个人平均行程距离更短；如果箱体之间高度重叠，说明各组内的差异可能远大于组间差异。
+
+这仍然只是描述性比较，不能仅凭箱线图判断统计显著性，更不能证明人口密度导致了出行距离变化。
+
+## 21.2 使用对数尺度绘制箱线图
+
+由于样本包含极长行程，原始尺度可能让大部分箱体显得很小。
+
+可以再绘制一个 `log1p()` 版本。
+
+```{r}
+# =====================================================
+# Step 21.2: 对数变换后的箱线图
+# =====================================================
+
+p_density_log_box <- ggplot(
+  analysis_data,
+  aes(
+    x = density_band,
+    y = log1p(mean_trip_miles)
+  )
+) +
+  geom_boxplot(
+    outlier.alpha = 0.15,
+    outlier.size = 0.6
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Trip Distance by Population Density",
+    subtitle = "Log-transformed mean trip distance",
+    x = "Population density (persons per sq. mile)",
+    y = "ln(1 + mean trip distance in miles)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_density_log_box)
+```
+
+两张图不需要同时放入正式论文。
+
+我建议优先保留原始距离单位的图，因为读者更容易理解“英里数”。如果原始图实在难以呈现组间分布，可以改用对数图，但图注必须清楚说明坐标含义。
+
+## 21.3 对比每个密度组的均值和中位数
+
+箱线图最容易观察中位数，但不适合直接比较算术平均值。
+
+因此，建议再做一张均值与中位数对比图。
+
+我们已经在步骤 19 生成 `density_summary`，这里可以直接使用。
+
+```{r}
+# =====================================================
+# Step 21.3: 均值和中位数对比
+# =====================================================
+
+density_compare <- density_summary %>%
+  select(
+    density_band,
+    mean_miles,
+    median_miles
+  ) %>%
+  pivot_longer(
+    cols = c(mean_miles, median_miles),
+    names_to = "statistic",
+    values_to = "distance"
+  ) %>%
+  mutate(
+    statistic = recode(
+      statistic,
+      mean_miles = "Mean",
+      median_miles = "Median"
+    )
+  )
+
+p_density_compare <- ggplot(
+  density_compare,
+  aes(
+    x = density_band,
+    y = distance,
+    colour = statistic
+  )
+) +
+  geom_point(
+    position = position_dodge(width = 0.4),
+    size = 3
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Mean and Median Trip Distance by Density",
+    x = "Population density (persons per sq. mile)",
+    y = "Trip distance (miles)",
+    colour = "Statistic"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_density_compare)
+```
+
+### 为什么要比较均值和中位数？
+
+假设某个高密度组中，大部分人每次出行距离都较短，但有少数人进行了极长距离旅行。
+
+可能出现：
+
+- 中位数较低；
+- 算术平均数较高；
+- 标准差非常大。
+
+因此，两种统计量呈现出的密度关系可能不同。
+
+这不是“哪个结果对就采用哪个”，而是说明距离数据的长尾特征可能对不同统计量产生不同影响。
+
+### 保存步骤 21 的图表
+
+```
+ggsave(
+  "figures/Figure_2a_density_boxplot.png",
+  plot = p_density_box,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+
+ggsave(
+  "figures/Figure_2b_density_log_boxplot.png",
+  plot = p_density_log_box,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+
+ggsave(
+  "figures/Figure_2c_density_mean_median.png",
+  plot = p_density_compare,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+```
+
+步骤 21 的最终成果： 选择一张最能回答核心研究问题的图，作为 Formative Proposal 的双变量关系图。
+
+# 七、步骤 22：其他变量的探索性分析
+
+对应 Lecture 5 — Multivariate Visualisation
+
+前面的分析只看了人口密度与平均行程距离。
+
+但实际上，出行行为还可能与工作状态、家庭车辆数、调查星期等因素有关。
+
+我们需要先通过描述性分析观察这些现象，再决定后续回归模型如何控制这些变量。
+
+建议开展三项探索。
+
+## 22.1 人口密度 × 工作状态
+
+研究问题：
+
+不同工作状态的人群中，人口密度与平均行程距离的描述性关系是否相似？
+
+这不是正式的交互项显著性检验，只是观察是否存在值得进一步研究的差异。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 22.1: 工作状态分组分析
+# =====================================================
+
+worker_density <- analysis_data %>%
+  group_by(
+    density_band,
+    worker
+  ) %>%
+  summarise(
+    n = n(),
+
+    households = n_distinct(HOUSEID),
+
+    mean_miles = mean(mean_trip_miles),
+
+    median_miles = median(mean_trip_miles),
+
+    .groups = "drop"
+  )
+
+print(worker_density)
+```
+
+然后绘图：
+
+```
+p_worker <- ggplot(
+  worker_density,
+  aes(
+    x = density_band,
+    y = median_miles,
+    colour = worker
+  )
+) +
+  geom_point(
+    position = position_dodge(width = 0.4),
+    size = 3
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Median Trip Distance by Density and Work Status",
+    x = "Population density (persons per sq. mile)",
+    y = "Median trip distance (miles)",
+    colour = "Work status"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_worker)
+```
+
+### 如何理解结果？
+
+如果工作者在不同密度组表现出与非工作者不同的变化形态，可能说明工作相关活动对出行距离有影响。
+
+但不能直接说“工作状态改变了人口密度的因果影响”。
+
+因为工作者和非工作者的年龄、收入、汽车拥有情况及其他生活特征可能也不同。
+
+这些问题需要在第四阶段的多元回归中继续研究。
+
+## 22.2 人口密度 × 家庭车辆拥有量
+
+这个操作比上一个更重要，因为 31 号文件的扩展模型 M2 和可选 M3 都涉及 `car_group`。
+
+正式建模之前，需要先判断每个交叉类别有多少样本。
+
+### 第一步：制作交叉频数表
+
+```{r}
+# =====================================================
+# Step 22.2: 人口密度和车辆数交叉表
+# =====================================================
+
+car_density_count <- analysis_data %>%
+  count(
+    density_band,
+    car_group,
+    .drop = FALSE,
+    name = "n"
+  )
+
+car_density_table <- car_density_count %>%
+  pivot_wider(
+    names_from = car_group,
+    values_from = n,
+    values_fill = 0
+  )
+
+print(car_density_table)
+```
+
+预期表格结构：
+
+| 人口密度 | 无车家庭 | 1 辆 | 2 辆及以上 |
+| ---- | ---- | --- | ------ |
+| 01   | 6    | 待运行 | 待运行    |
+| 02   | 待运行  | 待运行 | 待运行    |
+| 03   | 10   | 待运行 | 待运行    |
+| 04   | 待运行  | 待运行 | 待运行    |
+| 05   | 待运行  | 待运行 | 待运行    |
+| 06   | 待运行  | 待运行 | 待运行    |
+| 07   | 待运行  | 待运行 | 待运行    |
+| 08   | 待运行  | 待运行 | 待运行    |
+
+其中最低密度无车组的 6 人、第三密度无车组的 10 人，是 31 号文件已核实的情况。其他数值仍应由 R 实际计算。
+
+### 第二步：制作交叉样本热力图
+
+```
+p_car_heatmap <- ggplot(
+  car_density_count,
+  aes(
+    x = density_band,
+    y = car_group,
+    fill = n
+  )
+) +
+  geom_tile(
+    colour = "white"
+  ) +
+  geom_text(
+    aes(label = n),
+    size = 3
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Sample Counts by Density and Vehicle Ownership",
+    x = "Population density (persons per sq. mile)",
+    y = "Number of household vehicles",
+    fill = "Persons"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_car_heatmap)
+```
+
+### 为什么这张热力图非常有价值？
+
+即使总样本超过 9,000 人，某些交叉组仍可能只有个位数的观测。
+
+如果强行拟合八档人口密度与三档汽车拥有量的完整交互模型，就可能估计出非常不稳定的系数。
+
+因此，这张图不是为了装饰论文，而是帮助你判断：
+
+后续是否有足够数据支持复杂交互项。
+
+若样本支持不足，第四阶段可以考虑事先合并相邻密度档位，或者只保留人口密度和车辆数的主效应。
+
+需要注意：一个交叉单元格有 6 名受访者，并不一定意味着来自 6 个不同家庭。所以有必要同时检查每格的不同家庭数，尤其是后面准备使用家庭聚类标准误时。
+
+## 22.3 调查星期与行程距离的关系
+
+NHTS 调查覆盖不同星期。工作日与周末的活动安排可能有所不同。
+
+因此，建议单独检查调查日是否与个人平均行程距离存在描述性关联。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 22.3: 调查星期的分组统计
+# =====================================================
+
+weekday_summary <- analysis_data %>%
+  group_by(day_of_week) %>%
+  summarise(
+    n = n(),
+
+    mean_miles = mean(mean_trip_miles),
+
+    median_miles = median(mean_trip_miles),
+
+    .groups = "drop"
+  )
+
+print(weekday_summary)
+```
+
+绘制中位数柱状图：
+
+```
+p_weekday <- ggplot(
+  weekday_summary,
+  aes(
+    x = day_of_week,
+    y = median_miles
+  )
+) +
+  geom_col() +
+  labs(
+    title = "Median Trip Distance by Day of Week",
+    x = "Survey day",
+    y = "Median trip distance (miles)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_weekday)
+```
+
+这项分析的主要用途是判断调查星期是否值得作为后续回归控制变量。
+
+31 号文件已经建议将调查星期纳入基础控制。因此，这里的描述性统计可以帮助你更好地解释该变量的作用。
+
+### 保存步骤 22 的图表
+
+```
+ggsave(
+  "figures/Figure_3_work_status.png",
+  plot = p_worker,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+
+ggsave(
+  "figures/Figure_4_vehicle_heatmap.png",
+  plot = p_car_heatmap,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+
+ggsave(
+  "figures/Figure_5_weekday.png",
+  plot = p_weekday,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+```
+
+# 八、将第三阶段的统计结果全部保存
+
+最后，把所有统计结果保存为 CSV 文件，便于检查、绘制表格和后续写论文。
+
+```{r}
+# =====================================================
+# Export: 第三阶段统计结果
+# =====================================================
+
+write_csv(
+  y_summary,
+  "tables/01_dependent_variable_summary.csv"
+)
+
+write_csv(
+  continuous_summary,
+  "tables/02_continuous_summary.csv"
+)
+
+write_csv(
+  worker_summary,
+  "tables/03_worker_summary.csv"
+)
+
+write_csv(
+  car_summary,
+  "tables/04_car_summary.csv"
+)
+
+write_csv(
+  density_summary,
+  "tables/05_density_summary.csv"
+)
+
+write_csv(
+  zero_by_density,
+  "tables/06_zero_distance_by_density.csv"
+)
+
+write_csv(
+  worker_density,
+  "tables/07_density_by_work_status.csv"
+)
+
+write_csv(
+  car_density_count,
+  "tables/08_density_by_vehicle_count.csv"
+)
+
+write_csv(
+  weekday_summary,
+  "tables/09_weekday_summary.csv"
+)
+```
+
+执行完成后，文件夹内应包含相应的统计表和 PNG 图像。
+
+可以再检查一次：
+
+```
+list.files("tables")
+list.files("figures")
+```
+
+# 九、第三阶段结束后，你应该得到哪些成果？
+
+不是所有探索性图表都需要进入正式论文。建议将“分析时需要制作的成果”和“最终论文需要展示的成果”分开。
+
+| 成果          | 第三阶段必须做吗？ | 建议放入论文吗？      |
+| ----------- | --------- | ------------- |
+| 总体因变量描述统计   | 必须        | 必须            |
+| 连续和分类控制变量统计 | 必须        | 建议整合为 Table 1 |
+| 八组人口密度描述统计  | 必须        | 建议            |
+| 原始距离分布直方图   | 必须        | 根据可读性选择       |
+| 放大后的距离直方图   | 必须        | 可选            |
+| 对数变换后的分布图   | 建议        | 可选            |
+| 人口密度与距离箱线图  | 必须        | 优先放入          |
+| 密度组均值与中位数对比 | 必须        | 建议            |
+| 工作状态分组图     | 建议        | 可选            |
+| 车辆拥有量交叉热力图  | 建议        | 可用于方法解释       |
+| 调查星期分组图     | 建议        | 通常不必放正文       |
+
+因此，对于 Formative Proposal，建议至少保留：
+
+Table 1 — Descriptive Statistics
+
+展示因变量的均值、中位数、标准差、分位数与样本规模。
+
+Figure 1 — Distribution of Mean Trip Distance
+
+展示因变量的分布，讨论右偏和极端值。
+
+Figure 2 — Trip Distance by Population Density
+
+展示因变量与重点自变量的关系，解释组间差异。
+
+这三项直接对应 Formative Proposal 对描述性统计和两张主要图表的要求。
+
+# 十、第三阶段的结果应该如何解读？
+
+你要避免把“图表解释”写成“图表描述”。
+
+例如，仅仅写出“Figure 2 展示了人口密度和出行距离的关系”，并没有真正分析结果。
+
+比较好的分析需要回答：
+
+| 观察对象  | 应该思考的问题                |
+| ----- | ---------------------- |
+| 因变量分布 | 数据是否右偏？均值与中位数差多少？      |
+| 极端值   | 极端距离是否可能影响均值和后续回归？     |
+| 密度组差异 | 组间距离差异的方向、幅度和规律是什么？    |
+| 组内变异  | 不同密度组之间是否存在大量重叠？       |
+| 样本不均衡 | 最高密度组较小，是否影响统计结果稳定性？   |
+| 工作状态  | 不同工作状态的人群是否呈现不同的描述性关系？ |
+| 车辆拥有量 | 不同密度组的汽车拥有结构是否存在明显差异？  |
+| 调查日期  | 调查日是否可能影响出行行为？         |
+
+此外，你需要在讨论中明确三个局限。
+
+第一，出行者选择问题。 你的研究只包括调查日有记录行程的成年人，因此结果不能直接解释为什么有人当天没有出行。
+
+第二，横截面观察研究。 即使观察到高密度组行程距离更短，也不能仅凭描述性统计证明人口密度造成了这一结果。居住自选择和其他未观察因素都可能发挥作用。
+
+第三，空间指标的代理性质。 `HTPPOPDN` 描述的是居住地 Census Tract 的人口密度等级，不能代表一个人实际经历的街道环境、道路连通性或公共交通供给。
+
+这些限制会在最终论文的 Discussion 中继续使用。
+
+# 十一、第三阶段验收清单
+
+第三阶段：操作进度
+
+0/18
+
+步骤 18.1：完成因变量均值、中位数、SD、分位数与零值统计
+
+步骤 18.2：完成年龄、家庭规模和车辆数描述统计
+
+步骤 18.3：完成工作状态、车辆和调查星期频数统计
+
+步骤 19.1：核对八个人口密度组的样本数量
+
+步骤 19.2：计算各密度组均值、中位数和离散程度
+
+步骤 19.3：核查各密度组的零距离比例
+
+步骤 20.1：生成完整范围直方图
+
+步骤 20.2：生成 0–60 英里局部图
+
+步骤 20.3：生成 log1p 距离分布图
+
+步骤 21.1：完成人口密度分组箱线图
+
+步骤 21.2：完成对数尺度分组箱线图
+
+步骤 21.3：完成八组均值和中位数对比
+
+步骤 22.1：完成工作状态分组比较
+
+步骤 22.2：完成车辆数与人口密度交叉表
+
+步骤 22.3：完成调查星期的统计比较
+
+导出 tables/ 中的统计表
+
+导出 figures/ 中的图像
+
+选定 Formative 使用的描述统计表和两张核心图
+
+&#x20;复制操作清单
+
+## 十二、完成后如何判断可以进入第四阶段？
+
+只有在满足以下条件后，才建议开展正式回归：
+
+1. 样本仍然符合 31 号文件的成年人出行者口径，因变量没有被误改为每日总距离。
+2. 八个人口密度组的样本量和相关变量取值已核对。
+3. 已经了解因变量的偏态、零值和极端值情况。
+4. 已经绘制并解释人口密度与平均行程距离的描述性关系。
+5. 已经检查密度与车辆数交叉分类的样本量，了解复杂交互模型的限制。
+6. 所有图表都清楚区分了未加权样本统计与代表全国总体的统计推断。
+
+这一阶段最核心的三项成果，是 `y_summary`、`density_summary` 和 Figure 2。
+
+它们不仅能完成 Formative 的主要数据分析要求，而且会决定第四阶段如何合理建立 M0、M1、M2，以及是否有必要进一步尝试 M3 交互模型。

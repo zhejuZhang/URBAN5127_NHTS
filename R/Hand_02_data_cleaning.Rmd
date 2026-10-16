@@ -1,0 +1,388 @@
+# 步骤三、准备Rstudio环境
+
+## 1.设置文件夹
+建议在已有的 RStudio Project 中建立以下目录：
+
+URBAN5127_NHTS/
+│
+├── URBAN5127_NHTS.Rproj
+│
+├── data/
+│   ├── raw/
+│   │   ├── perv2pub.csv
+│   │   ├── tripv2pub.csv
+│   │   ├── hhv2pub.csv
+│   │   ├── vehv2pub.csv
+│   │   └── ldtv2pub.csv
+│   │
+│   └── processed/
+│
+├── R/
+│   └── 02_data_cleaning.R
+│
+├── figures/
+└── tables/
+
+
+## 2. 创建脚本
+在 RStudio 中：
+File → New File → Rmd
+保存为：
+R/02_data_cleaning.Rmd
+
+## 3.安装和加载R包
+第一次使用时在 Console 中执行：
+```{r install_and_load_packages, eval=FALSE}
+install.packages("tidyverse") # 安装tidyverse包
+library(tidyverse) # 加载tidyverse包
+```
+
+## 4.确认当前工作目录
+```{r check_working_directory}
+getwd() # 获取当前工作目录
+```
+预期应指向你的 URBAN5127_NHTS 项目根目录。
+不建议在代码中反复使用 setwd() 设置电脑上的绝对路径。使用 RStudio Project 和相对路径，后续 Quarto 才更容易复现分析。
+
+# 步骤六、导入数据并检查变量类型
+
+```{r import_data}
+stopifnot(file.exists("data/raw/perv2pub.csv"), file.exists("data/raw/tripv2pub.csv"), file.exists("data/raw/hhv2pub.csv"), file.exists("data/raw/vehv2pub.csv"), file.exists("data/raw/ldtv2pub.csv")) # 检查数据文件是否存在
+
+# 读取个人数据
+person <- read_csv("data/raw/perv2pub.csv", col_types = cols(.default = col_character()), show_col_types = FALSE)
+trip <- read_csv("data/raw/tripv2pub.csv", col_types = cols(.default = col_character()), show_col_types = FALSE)
+
+# 查看数据规模
+dim(person)
+dim(trip)
+
+# 查看字段结构
+glimpse(person)
+glimpse(trip)
+
+# 检查核心变量是否存在
+required_person <- c("HOUSEID", "PERSONID", "R_AGE", "HTPPOPDN", "CNTTDTR", "WORKER", "HHSIZE", "HHVEHCNT", "TRAVDAY", "TDAYDATE", "WTPERFIN")
+required_trip <- c("HOUSEID", "PERSONID", "TRIPID", "TRPMILES")
+
+# stopifnot() 函数用于检查条件是否为 TRUE，如果不为 TRUE，则会抛出错误并停止执行。
+stopifnot(all(required_person %in% names(person)), all(required_trip %in% names(trip)))
+```
+
+# 步骤 7：检查出行距离中的异常编码
+
+```{r check_trip_distance}
+# mean(c(2, 5, -9))
+
+# ==================================================
+# Step 7: 检查行程距离
+# ==================================================
+
+trip <- trip %>%   mutate(       miles = parse_double(TRPMILES)   )
+
+# 数据整体摘要
+summary(trip$miles)
+
+# 检查原始编码
+trip %>%   count(TRPMILES, sort = TRUE)
+
+# 专门统计异常编码
+trip %>%   summarise(       total_trips = n(),       missing_value = sum(is.na(miles)),       negative_distance = sum(           miles < 0,           na.rm = TRUE       ),       zero_distance = sum(           miles == 0,           na.rm = TRUE       ),       valid_distance = sum(           is.finite(miles) & miles >= 0       )   )
+
+# 检查负数的具体编码
+trip %>%   filter(miles < 0) %>%   count(TRPMILES)
+```
+
+# 步骤 8：检查主键并统计每个人的行程数量
+```{r check_primary_key}
+# ==================================================
+# Step 8: 核验数据主键
+# ==================================================
+
+# 个人表：一人一行
+anyDuplicated(   person[c("HOUSEID", "PERSONID")]
+)
+
+# 行程表：一人可能有多次行程
+# 但每次行程的联合键应唯一
+anyDuplicated(   trip[c("HOUSEID", "PERSONID", "TRIPID")]
+)
+
+# 检查是否有找不到所属个人的行程
+unmatched_trips <- trip %>%   anti_join(       person,       by = c("HOUSEID", "PERSONID")   )
+
+nrow(unmatched_trips)
+
+# 统计每个人有多少条行程
+trip_counts <- trip %>%   group_by(HOUSEID, PERSONID) %>%   summarise(       n_trips = n(),       .groups = "drop"   )
+
+# 查看结果
+head(trip_counts)
+
+# 有行程记录的独立受访者人数
+nrow(trip_counts)
+```
+
+# 步骤 9：计算个人平均每次行程距离
+```{r calculate_average_trip_distance}
+# ==================================================
+# Step 9: 构建个人平均行程距离
+# ==================================================
+
+trip_summary <- trip %>%   group_by(HOUSEID, PERSONID) %>%   summarise(       # 这个人有多少次行程       n_trips = n(),      # 判断全部已记录行程距离是否有效       all_distances_valid = all(           is.finite(miles) & miles >= 0       ),      # 如果全部有效，才计算平均值       mean_trip_miles = if (all_distances_valid) {           mean(miles)       } else {           NA_real_       },       .groups = "drop"   )
+
+# 查看新生成的汇总表
+glimpse(trip_summary)
+
+# 检查结果
+trip_summary %>%   summarise(       n_persons = n(),       invalid_persons = sum(!all_distances_valid),       valid_persons = sum(all_distances_valid),       zero_mean = sum(           mean_trip_miles == 0,           na.rm = TRUE       )   )
+```
+# 步骤 10：把行程汇总结果连接到个人表
+```{r join_trip_summary_to_person}
+# ==================================================
+# Step 10: 合并个人与行程汇总数据
+# ==================================================
+
+person_day <- person %>%   left_join(       trip_summary,       by = c("HOUSEID", "PERSONID"),       relationship = "one-to-one"   )
+
+# 确认连接后没有新增或丢失个人
+nrow(person_day)
+nrow(person)
+
+stopifnot(   nrow(person_day) == nrow(person)
+)
+
+# 查看部分记录
+person_day %>%   select(       HOUSEID, PERSONID,       R_AGE, HTPPOPDN,       n_trips, mean_trip_miles   ) %>%   head(10)
+```
+
+# 步骤 11：检查两张表是否真正关联正确
+```{r check_joined_data}
+# ==================================================
+# Step 11: 检查行程数量一致性
+# ==================================================
+
+person_day <- person_day %>%   mutate(       reported_trips = parse_integer(CNTTDTR),       recorded_trips = coalesce(           n_trips, 0L       )   )
+
+# 不一致的受访者
+mismatch <- person_day %>%   filter(       is.na(reported_trips) |           recorded_trips != reported_trips   )
+
+# 查看不一致人数
+nrow(mismatch)
+
+# 检查无行程人数
+person_day %>%   summarise(       all_persons = n(),       with_trips = sum(recorded_trips > 0),       without_trips = sum(recorded_trips == 0)   )
+```
+
+# 步骤 12：筛选 18 岁及以上成年人
+```{r filter_adults}
+# ==================================================
+# Step 12: 筛选成年人
+# ==================================================
+
+person_day <- person_day %>%   mutate(       age = parse_double(R_AGE)   )
+
+# 检查年龄分布
+summary(person_day$age)
+
+# 检查年龄缺失
+sum(is.na(person_day$age))
+
+# 筛选18岁及以上
+adult <- person_day %>%   filter(age >= 18)
+
+# 查看剩余人数
+nrow(adult)
+```
+
+# 步骤 13：筛选当天有行程记录的成年人
+```{r filter_adults_with_trips} 
+# ==================================================
+# Step 13: 筛选有行程的成年人
+# ==================================================
+
+# 先检查有行程和无行程的人数
+adult %>%   count(       has_trip = recorded_trips > 0   )
+
+# 只保留有行程记录的人
+traveller <- adult %>%   filter(recorded_trips > 0)
+
+nrow(traveller)
+```
+
+# 步骤 14：排除行程距离无效的成年人
+```{r filter_adults_with_valid_distance}
+# ==================================================
+# Step 14: 排除距离无效的个人
+# ==================================================
+
+# 先查看有多少人存在无效距离
+traveller %>%   count(all_distances_valid)
+
+# 保留全部行程距离有效的人
+complete_distance <- traveller %>%   filter(all_distances_valid)
+
+nrow(complete_distance)
+
+# 再次检查平均距离是否有效
+sum(   is.na(complete_distance$mean_trip_miles)
+)
+```
+
+# 步骤 15：筛选有效的居住地人口密度
+```{r filter_valid_pop_density}
+# ==================================================
+# Step 15: 筛选有效人口密度
+# ==================================================
+
+# 查看原始人口密度代码分布
+complete_distance %>%   count(HTPPOPDN, sort = TRUE)
+
+# 构建八个有效类别代码
+valid_density_codes <- sprintf(   "%02d", 1:8
+)
+
+valid_density_codes
+
+# 筛选有效人口密度
+known_density <- complete_distance %>%   filter(       HTPPOPDN %in% valid_density_codes   )
+
+nrow(known_density)
+```
+
+# 步骤 16：检查控制变量和调查权重
+```{r check_control_variables_and_weights}
+# ==================================================
+# Step 16: 检查和清洗基础控制变量
+# ==================================================
+
+known_density <- known_density %>%   mutate(       hh_size = parse_double(HHSIZE),       vehicles = parse_double(HHVEHCNT),       person_weight = parse_double(WTPERFIN)   )
+
+# 工作状态分布
+known_density %>%   count(WORKER)
+
+# 家庭人数
+summary(known_density$hh_size)
+
+# 家庭车辆数
+summary(known_density$vehicles)
+
+# 调查日星期
+known_density %>%   count(TRAVDAY)
+
+# 个人调查权重
+summary(known_density$person_weight)
+
+# 地区控制变量检查
+known_density %>%   count(CENSUS_R)
+
+# 调查年月检查
+known_density %>%   count(TDAYDATE)
+
+# 正式筛选
+analysis_data <- known_density %>%   filter(       WORKER %in% c("01", "02"),       hh_size > 0,       vehicles >= 0,       TRAVDAY %in% sprintf("%02d", 1:7),       is.finite(person_weight),       person_weight > 0   )
+
+nrow(analysis_data)
+```
+
+# 步骤 17：完成变量构建与重编码
+```{r finalize_variables}
+# ==================================================
+# Step 17: 变量重编码
+# ==================================================
+
+analysis_data <- analysis_data %>%   mutate(       # 1. 核心自变量：Tract人口密度       density_band = factor(           HTPPOPDN,           levels = sprintf("%02d", 1:8)       ),      # 2. 工作状态       worker = factor(           WORKER,           levels = c("01", "02"),           labels = c("worker", "not_worker")       ),      # 3. 家庭车辆分组       car_group = factor(           case_when(               vehicles == 0 ~ "0",               vehicles == 1 ~ "1",               vehicles >= 2 ~ "2+"           ),           levels = c("0", "1", "2+")       ),      # 4. 调查日星期       day_of_week = factor(           TRAVDAY,           levels = sprintf("%02d", 1:7),           labels = c(               "Sunday",               "Monday",               "Tuesday",               "Wednesday",               "Thursday",               "Friday",               "Saturday"           )       ),      # 5. 调查时期       survey_period = factor(TDAYDATE),      # 6. 区域类别       census_region = factor(CENSUS_R),      # 7. 转换为公里       mean_trip_km = mean_trip_miles * 1.609344,      # 8. 预先构建对数变换版本       log_mean_trip = log1p(mean_trip_miles)   )
+```
+
+
+# 步骤 18：最终质量验收
+1. 检查记录数量与家庭数量
+```{r final_quality_check}
+# ==================================================
+# 最终核查 A：样本数量
+# ==================================================
+
+nrow(analysis_data)
+
+n_distinct(analysis_data$HOUSEID)
+
+n_distinct(   analysis_data$HOUSEID,   analysis_data$PERSONID
+)
+
+# 同一人是否存在重复记录
+anyDuplicated(   analysis_data[c("HOUSEID", "PERSONID")]
+)
+```
+
+2. 检查因变量是否有效
+```{r final_quality_check_response_variable}
+# ==================================================
+# 最终核查 B：因变量
+# ==================================================
+
+summary(analysis_data$mean_trip_miles)
+
+sum(is.na(analysis_data$mean_trip_miles))
+
+sum(analysis_data$mean_trip_miles < 0)
+
+sum(analysis_data$mean_trip_miles == 0)
+
+quantile(   analysis_data$mean_trip_miles,   probs = c(0.25, 0.5, 0.75, 0.95, 0.99),   na.rm = TRUE
+)
+```
+
+3. 检查人口密度样本是否分布合理
+```{r final_quality_check_density_distribution}
+# ==================================================
+# 最终核查 C：人口密度
+# ==================================================
+
+analysis_data %>%   group_by(density_band) %>%   summarise(       persons = n(),       households = n_distinct(HOUSEID),       .groups = "drop"   )
+```
+
+4. 检查人口密度与汽车数交互的分组支持
+```{r final_quality_check_density_car_interaction}
+# ==================================================
+# 最终核查 D：交互分析可行性
+# ==================================================
+
+analysis_data %>%   count(       density_band,       car_group   ) %>%   pivot_wider(       names_from = car_group,       values_from = n,       values_fill = 0   )
+```
+# 步骤 19：制作样本筛选流程表
+```{r sample_selection_flow_chart}
+# ==================================================
+# 最终核查 E：样本筛选流程
+# ==================================================
+
+sample_flow <- tibble(   step = c(       "All respondents",       "Adults aged 18+",       "Adult travellers",       "Complete trip distances",       "Valid population density",       "Valid core covariates"   ),   remaining_n = c(       nrow(person),       nrow(adult),       nrow(traveller),       nrow(complete_distance),       nrow(known_density),       nrow(analysis_data)   )
+) %>%   mutate(       excluded_n = lag(           remaining_n,           default = first(remaining_n)       ) - remaining_n,       retained_percent = round(           100 * remaining_n / first(remaining_n),           2       )   )
+
+print(sample_flow)
+```
+
+# 步骤 20：保存清洗好的数据
+```{r save_cleaned_data}
+# ==================================================
+# 保存结果
+# ==================================================
+
+# 如果 processed 目录不存在，创建它
+dir.create(   "data/processed",   recursive = TRUE,   showWarnings = FALSE
+)
+
+dir.create(   "tables",   recursive = TRUE,   showWarnings = FALSE
+)
+
+# 保存R原生数据格式
+saveRDS(   analysis_data,   "data/processed/analysis_data.rds"
+)
+
+# 另存CSV，便于人工查看
+write_csv(   analysis_data,   "data/processed/analysis_data.csv"
+)
+
+# 保存样本筛选表
+write_csv(   sample_flow,   "tables/sample_flow.csv"
+)
+```
