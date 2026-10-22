@@ -1,0 +1,975 @@
+---
+title: "02_data_Clean"
+output: html_document
+date: "2026-10-22"
+---
+
+# NHTS data cleaning and variable construction
+
+This document prepares a **person-level analysis dataset** by combining the
+NHTS person and trip files, checking travel distances, selecting eligible adult
+travellers, and recoding variables for subsequent descriptive statistics and
+regression analysis.
+
+**Path convention:** The relative file paths in this document assume that the
+R working directory is the project's `R/` folder. The prefix `../` moves up to
+the project root, where `data/` and `tables/` are stored. Run `# Print the working directory that relative file paths are based on.
+# If this displays the project's R/ folder, ../data/raw/ refers to the
+# data/raw/ folder one level above it.
+getwd()` to
+confirm your working directory before executing the document. If you run code
+from the project root instead, the relative paths will need adjusting.
+
+**Important:** This workflow calculates each person's unweighted mean of their
+recorded trip distances. The person-level survey weight is parsed and retained
+for later analysis but is not applied to the mean calculation here.
+
+```{r setup, include=FALSE}
+# Apply this setting to all R code chunks that follow.
+# echo = TRUE displays the R commands in the knitted HTML report.
+# include = FALSE in the chunk header hides only this setup chunk.
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Run this installation command ONCE if tidyverse is not installed.
+# Keep it commented out for reproducible rendering: knitting should not
+# attempt to install packages every time the report is generated.
+# install.packages("tidyverse")
+```
+
+```{r}
+# Load packages for importing, transforming, summarising, and inspecting data.
+# tidyverse includes readr and dplyr, which provide read_csv(), mutate(),
+# filter(), group_by(), summarise(), and the pipe operator %>%.
+library(tidyverse)
+```
+
+```{r}
+getwd()
+```
+
+```{r}
+library(tidyverse)
+
+# PERSON file: one record is intended to represent one surveyed person.
+# Using character columns initially avoids accidental loss of leading zeros
+# in household IDs, person IDs, and other categorical survey codes.
+# Convert only selected variables to numeric later, after checking their codes.
+# Check that the person-level data file exists
+# file.exists() returns TRUE if the path can be found.
+# stopifnot() stops execution if the condition is FALSE; this prevents a
+# confusing read_csv() error when the source file is missing.
+stopifnot(file.exists("../data/raw/perv2pub.csv"))
+
+# Read the person-level data
+# read_csv() imports the CSV as a tibble (a modern data frame).
+# col_character() preserves original codes verbatim rather than guessing types.
+# show_col_types = FALSE suppresses the import-type message.
+person <- read_csv(
+  "../data/raw/perv2pub.csv",
+  col_types = cols(.default = col_character()),
+  show_col_types = FALSE
+)
+
+# dim() reports c(number_of_rows, number_of_columns).
+# Record these counts to document the size of the raw source data.
+# Check the dataset dimensions
+dim(person)
+```
+
+
+```{r}
+# glimpse() shows variable names, storage types, and sample values.
+# Use it to confirm that the file imported correctly before merging.
+# Inspect the column structure
+glimpse(person)
+```
+
+
+```{r}
+
+# TRIP file: a single person can have multiple rows, one for each trip.
+# Keep the household/person keys as character strings so they will match
+# the corresponding keys from the person dataset.
+# Check that the trip-level data file exists
+# Stop immediately if the expected trip CSV cannot be located.
+stopifnot(file.exists("../data/raw/tripv2pub.csv"))
+
+# Read the trip-level data
+# Import raw trip observations without automatic numeric coercion.
+# The trip-distance field TRPMILES will be parsed explicitly in Step 7.
+trip <- read_csv(
+  "../data/raw/tripv2pub.csv",
+  col_types = cols(.default = col_character()),
+  show_col_types = FALSE
+)
+
+# Check the dataset dimensions
+dim(trip)
+```
+
+
+```{r}
+# Inspect the column structure
+glimpse(trip)
+```
+
+
+```{r}
+# List the exact variable names expected in the person-level file.
+# Define this list BEFORE checking the names; otherwise R would report
+# "object 'required_person' not found" in a fresh session.
+required_person <- c("HOUSEID", "PERSONID", "R_AGE", "HTPPOPDN", "CNTTDTR", "WORKER", "HHSIZE", "HHVEHCNT", "TRAVDAY", "TDAYDATE", "WTPERFIN")
+
+# %in% compares each requested name with the actual column names.
+# The result is a logical vector: TRUE = present, FALSE = missing.
+person_check <- required_person %in% names(person)
+
+cat("===== Person-Level Variable Check =====\n")
+
+# data.frame() creates an easy-to-read two-column checking table.
+# Each row shows the requested variable and whether it was found.
+print(data.frame(
+  Variable = required_person,
+  Exists = person_check
+))
+
+```
+
+
+```{r}
+# List required trip variables BEFORE testing for their presence.
+# HOUSEID + PERSONID links trips to the person file; TRIPID identifies a trip.
+required_trip <- c("HOUSEID", "PERSONID", "TRIPID", "TRPMILES")
+
+# Apply the same presence check to the trip-level dataset.
+trip_check <- required_trip %in% names(trip)
+
+cat("\n===== Trip-Level Variable Check =====\n")
+# Print the trip-variable results so missing or misspelled columns
+# can be identified before data cleaning starts.
+print(data.frame(
+  Variable = required_trip,
+  Exists = trip_check
+))
+```
+
+
+```{r}
+# all() is TRUE only when every requested variable was found.
+# If either condition fails, stop before calculations that need these fields.
+# A successful stopifnot() call normally produces no console output.
+# This checks column existence, not data completeness or code validity.
+stopifnot(
+  all(required_person %in% names(person)),
+  all(required_trip %in% names(trip))
+)
+```
+
+
+```{r}
+# ==================================================
+# Step 7: Validate trip distances
+# ==================================================
+
+# mutate() creates or replaces columns while keeping other columns.
+# parse_double() converts the original text distance to a numeric variable.
+# Invalid nonnumeric text is converted to NA with a parsing warning.
+# Numeric special codes, including negatives, are NOT removed here.
+trip <- trip %>% mutate( miles = parse_double(TRPMILES))
+
+# Summarize the overall distribution
+# summary() returns the minimum, quartiles, median, mean, and maximum
+# (and NA information) for a numeric column. Unusual negative numbers
+# should be investigated against the dataset documentation.
+summary(trip$miles)
+```
+
+
+```{r}
+# Inspect the original values and codes
+# count() tabulates each distinct original value or special code.
+# sort = TRUE orders the most common values first; compare them with the
+# parsed values before deciding what counts as a valid trip distance.
+trip %>% count(TRPMILES, sort = TRUE)
+```
+
+
+```{r}
+# Count invalid or unusual values
+# Summarise the quality of the full trip table in one row.
+# n() counts rows; is.na() finds missing parsed values.
+# na.rm = TRUE stops missing values from contaminating a logical count.
+# is.finite() excludes NA, NaN, Inf, and -Inf.
+# Here, distance zero is accepted as nonnegative; negative distances fail.
+trip %>%
+  summarise(
+    total_trips = n(),
+    missing_value = sum(is.na(miles)),
+    negative_distance = sum(
+      miles < 0,
+      na.rm = TRUE
+    ),
+    zero_distance = sum(
+      miles == 0,
+      na.rm = TRUE
+    ),
+    valid_distance = sum(
+      is.finite(miles) & miles >= 0
+    )
+  )
+```
+
+
+```{r}
+# Identify the specific negative-distance codes
+# filter() keeps only rows meeting the stated condition.
+# Counting original strings shows which negative numeric codes need review.
+# It does NOT delete these rows from the original trip dataset.
+trip %>%
+  filter(miles < 0) %>%
+  count(TRPMILES)
+```
+
+```{r}
+# ==================================================
+# Step 8: Validate dataset keys
+# ==================================================
+
+# Person table: one row per person
+# The combined HOUSEID + PERSONID columns are intended to identify a person.
+# anyDuplicated() returns 0 if there is no duplicate key, otherwise the
+# position of the first repeated key. A nonzero result requires investigation.
+anyDuplicated(person[c("HOUSEID", "PERSONID")])
+
+# Trip table: each person may have multiple trips
+# However, the composite key for each trip must be unique
+# HOUSEID + PERSONID + TRIPID should identify a unique trip record.
+# A person may legitimately have multiple trips, but their full trip keys
+# should not be duplicated.
+anyDuplicated(trip[c("HOUSEID", "PERSONID", "TRIPID")])
+
+# Check for trips without a matching person record
+# anti_join() returns trip rows without a matching household/person pair
+# in the person table. It is a diagnostic and does not modify 'trip'.
+# A large unmatched count could signal key-format or source-data problems.
+unmatched_trips <- trip %>% anti_join( person, by = c("HOUSEID", "PERSONID"))
+
+# Number of trip rows with no matched person record.
+nrow(unmatched_trips)
+
+# Count trips for each person
+# Group all trips belonging to the same person.
+# group_by() creates one group per HOUSEID + PERSONID pair.
+# n() returns the number of trip rows in each group.
+# .groups = "drop" produces an ungrouped summary tibble.
+trip_counts <- trip %>%
+  group_by(HOUSEID, PERSONID) %>%
+  summarise(
+    # n() includes every recorded trip row, even one with an invalid distance.
+    # We retain the raw count to check person-level trip consistency later.
+    n_trips = n(),
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+# Inspect the results
+# head() displays the first six rows by default; it is only a preview.
+head(trip_counts)
+```
+
+
+```{r}
+# Count unique respondents with recorded trips
+# Count how many unique household/person pairs have at least one trip.
+# This number is not necessarily the number of all surveyed persons.
+nrow(trip_counts)
+```
+
+```{r}
+# ==================================================
+# Step 9: Calculate mean trip distance for each person
+# ==================================================
+
+# Unit of analysis changes here: many trip rows become one row per person.
+# The outcome mean_trip_miles is a simple arithmetic mean of that person's
+# trip distances, not a survey-weighted or distance-weighted average.
+# This rule requires ALL observed distances for that person to be valid.
+trip_summary <- trip %>%
+  group_by(HOUSEID, PERSONID) %>%
+  summarise(
+    # Count the trips recorded for this person
+    n_trips = n(),
+
+    # Check whether all recorded trip distances are valid
+    # all() returns TRUE only when every distance is finite and >= 0.
+    # Missing values and negative special codes cause this flag to be FALSE.
+    all_distances_valid = all(
+      is.finite(miles) & miles >= 0
+    ),
+
+    # Calculate the mean only if every trip distance is valid
+    # if / else creates a mean only for a person with fully valid trip data.
+    # NA_real_ is a missing value explicitly stored as a numeric (double).
+    mean_trip_miles = if (all_distances_valid) {
+      mean(miles)
+    } else {
+      NA_real_
+    },
+
+    .groups = "drop"
+  )
+
+# Inspect the newly created summary table
+# Confirm that each row represents one person and that the new fields
+# n_trips, all_distances_valid, and mean_trip_miles have appropriate types.
+glimpse(trip_summary)
+```
+
+
+```{r}
+# Check the results
+# Audit the person-level trip summary before joining it to the person file.
+# The zero_mean total counts people whose valid recorded trips average zero.
+trip_summary %>%
+  summarise(
+    n_persons = n(),
+    invalid_persons = sum(!all_distances_valid),
+    valid_persons = sum(all_distances_valid),
+    zero_mean = sum(
+      mean_trip_miles == 0,
+      na.rm = TRUE
+    )
+  )
+```
+
+```{r}
+# ==================================================
+# Step 10: Merge person data with trip summaries
+# ==================================================
+
+# left_join() keeps ALL rows from the person file (left table).
+# Matching person-level trip summaries are added where keys correspond.
+# People with no recorded trips receive NA for new trip-summary fields.
+# relationship = "one-to-one" asks dplyr to enforce unique join matches.
+person_day <- person %>%
+  left_join(
+    trip_summary,
+    by = c("HOUSEID", "PERSONID"),
+    relationship = "one-to-one"
+  )
+
+# Compare the number of rows before and after the left join.
+# Equal row counts alone do not prove perfect matches, so key and
+# missing-value checks elsewhere in the workflow remain important.
+# Confirm that the join neither adds nor removes people
+nrow(person_day)
+nrow(person)
+
+stopifnot(
+  nrow(person_day) == nrow(person)
+)
+```
+
+
+```{r}
+# Inspect a sample of records
+# select() keeps the listed columns solely for this preview.
+# head(10) shows how the linked trip summaries appear beside person fields;
+# the full person_day dataset still contains all original columns.
+person_day %>%
+  select(
+    HOUSEID, PERSONID,
+    R_AGE, HTPPOPDN,
+    n_trips, mean_trip_miles
+  ) %>%
+  head(10)
+```
+
+
+```{r}
+# ==================================================
+# Step 11: Check consistency of trip counts
+# ==================================================
+
+# CNTTDTR records the reported daily trip count in the person dataset.
+# parse_integer() converts that original character value to an integer.
+# coalesce(n_trips, 0L) replaces missing joined trip counts with zero;
+# the 'L' suffix marks 0L as an integer rather than a double.
+person_day <- person_day %>%
+  mutate(
+    reported_trips = parse_integer(CNTTDTR),
+
+    recorded_trips = coalesce(
+      n_trips, 0L
+    )
+  )
+
+# Identify respondents with mismatched trip counts
+# Keep rows where the reported trip count is missing or differs from
+# the number of trip rows that were actually found in the trip file.
+# This creates a diagnostic table; the main dataset is NOT filtered here.
+mismatch <- person_day %>%
+  filter(
+    is.na(reported_trips) |
+    recorded_trips != reported_trips
+  )
+
+# Count respondents with mismatched trip counts
+# Print the number of mismatched people for the audit log.
+nrow(mismatch)
+```
+
+
+```{r}
+# Count respondents with no recorded trips
+# Compare the full person sample with the subset having trip records.
+# These categories should add up to the number of rows in person_day.
+person_day %>%
+  summarise(
+    all_persons = n(),
+    with_trips = sum(recorded_trips > 0),
+    without_trips = sum(recorded_trips == 0)
+  )
+```
+
+```{r}
+# ==================================================
+# Step 12: Select adult respondents
+# ==================================================
+
+# Convert R_AGE from its imported text representation to numeric age.
+# inspect the summary below for missing, negative, or special-coded values;
+# those values must be interpreted using the NHTS variable documentation.
+person_day <- person_day %>%
+  mutate(
+    age = parse_double(R_AGE)
+  )
+
+# Inspect the age distribution
+# Review the minimum, quartiles, maximum, and missing ages before filtering.
+summary(person_day$age)
+```
+
+
+```{r}
+# Count missing age values
+# sum(TRUE/FALSE) counts TRUE values because TRUE is treated as 1.
+# This reports how many people have an unavailable parsed age.
+sum(is.na(person_day$age))
+
+# Keep respondents aged 18 or older
+# Adults are defined as age >= 18 for this research question.
+# Rows with NA age do not satisfy the condition and are dropped by filter().
+adult <- person_day %>%
+  filter(age >= 18)
+
+# Count the remaining respondents
+nrow(adult)
+```
+
+```{r}
+# ==================================================
+# Step 13: Select adults with recorded trips
+# ==================================================
+
+# First count adults with and without recorded trips
+# Make a frequency table for adult respondents with or without trips.
+# The new column name has_trip is a logical TRUE/FALSE indicator.
+adult %>%
+  count(
+    has_trip = recorded_trips > 0
+  )
+
+# Keep only respondents with recorded trips
+# Limit analysis to adults who actually made at least one recorded trip.
+# Respondents with zero trips cannot contribute a personal mean trip distance.
+traveller <- adult %>%
+  filter(recorded_trips > 0)
+```
+
+
+```{r}
+# Print the adult traveller sample size after this exclusion.
+nrow(traveller)
+```
+
+### Run the code
+
+```{r}
+# ==================================================
+# Step 14: Exclude people with invalid trip distances
+# ==================================================
+
+# First count people with invalid trip distances
+# Review the TRUE/FALSE counts for the person-level distance validity flag.
+# TRUE means every trip distance was finite and nonnegative;
+# FALSE indicates at least one invalid distance for that person.
+traveller %>%
+  count(all_distances_valid)
+```
+
+
+```{r}
+# Keep people whose recorded trip distances are all valid
+# Exclude entire persons (not individual trip rows) if any recorded
+# trip distance is invalid, following the rule created in Step 9.
+# This is a strict complete-distance criterion and may reduce the sample.
+complete_distance <- traveller %>%
+  filter(all_distances_valid)
+
+nrow(complete_distance)
+
+# Recheck whether mean trip distances are valid
+# A properly constructed complete-distance subset should have no NA
+# values in mean_trip_miles. The expected result is zero.
+sum(
+  is.na(complete_distance$mean_trip_miles)
+)
+```
+
+
+```{r}
+# ==================================================
+# Step 15: Keep valid population-density categories
+# ==================================================
+
+# Inspect the distribution of original population-density codes
+# Inspect actual density codes before deciding which categories are valid.
+# Leading zeros matter because HTPPOPDN was imported as a character field.
+complete_distance %>%
+  count(HTPPOPDN, sort = TRUE)
+```
+
+
+```{r}
+# Define the eight valid category codes
+# sprintf("%02d", 1:8) creates "01", "02", ... , "08".
+# %02d means a width of two digits with a leading zero when needed.
+# Verify these exact codes against the source data and codebook.
+valid_density_codes <- sprintf(
+  "%02d", 1:8
+)
+
+valid_density_codes
+
+# Keep records with valid population-density codes
+# %in% retains people whose original population-density code belongs
+# to the eight permitted categories. Other codes and NA are excluded.
+known_density <- complete_distance %>%
+  filter(
+    HTPPOPDN %in% valid_density_codes
+  )
+
+nrow(known_density)
+```
+
+```{r}
+# Display all permitted density codes as an additional diagnostic.
+# This repeats the category-code construction used above.
+sprintf("%02d", 1:8)
+```
+
+```{r}
+# ==================================================
+# Step 16: Inspect and clean the core control variables
+# ==================================================
+
+# Convert three control variables to numeric representations.
+# hh_size is household size; vehicles is the household vehicle count;
+# person_weight is the respondent-level survey weight.
+# parse_double() may return NA for nonnumeric codes; later filters handle
+# some invalid values, but the output distributions should be inspected.
+known_density <- known_density %>%
+  mutate(
+    hh_size = parse_double(HHSIZE),
+    vehicles = parse_double(HHVEHCNT),
+    person_weight = parse_double(WTPERFIN)
+  )
+
+# Distribution of employment status
+# Frequency table of the original WORKER codes.
+# Check that expected codes "01" and "02" actually occur in the data.
+known_density %>%
+  count(WORKER)
+```
+
+
+```{r}
+# Household size
+# Inspect household size. Values <= 0 are not acceptable and
+# will be removed during the final eligibility filter.
+summary(known_density$hh_size)
+```
+
+
+```{r}
+# Number of household vehicles
+# Inspect household vehicle ownership. Negative values often indicate
+# special missing/unknown codes rather than a real number of cars.
+summary(known_density$vehicles)
+```
+
+
+```{r}
+# Day of the week for the travel survey
+# Tabulate day-of-week codes before converting them to labelled factors.
+# The code below assumes two-character codes from "01" through "07".
+known_density %>%
+  count(TRAVDAY)
+```
+
+
+```{r}
+# Person-level survey weights
+# A valid survey weight should be finite and greater than zero.
+# This script retains a weight for future modelling, but does not yet
+# apply survey weights to trip means or summary statistics.
+summary(known_density$person_weight)
+```
+
+
+```{r}
+# Check the regional control variable
+# Inspect region identifiers; factor() in Step 17 will represent
+# these as categories, not as numerical distances between regions.
+known_density %>%
+  count(CENSUS_R)
+```
+
+
+```{r}
+# Check the survey date codes
+# Inspect survey-date / survey-period codes.
+# Step 17 preserves each distinct observed code as a factor level.
+known_density %>%
+  count(TDAYDATE)
+```
+
+
+```{r}
+# Apply the final eligibility rules for core control variables.
+# filter() combines these comma-separated conditions with logical AND:
+# employment code is valid, household size positive, vehicle count
+# nonnegative, survey weekday recognised, and person weight positive/finite.
+# Rows failing any condition (including NA comparisons) are removed.
+# Note: people with mismatched trip counts were flagged earlier, not excluded.
+analysis_data <- known_density %>%
+  filter(
+    WORKER %in% c("01", "02"),
+    hh_size > 0,
+    vehicles >= 0,
+    TRAVDAY %in% sprintf("%02d", 1:7),
+    is.finite(person_weight),
+    person_weight > 0
+  )
+
+# Check the number of complete observations available for analysis.
+nrow(analysis_data)
+```
+
+```{r}
+# ==================================================
+# Step 17: Recode variables
+# ==================================================
+
+# Create analysis-ready variables without deleting their source columns.
+# factor() stores categorical values as levels; the order of levels can
+# affect which category is used as the reference in regression models.
+# The recodes assume the original survey-code definitions are correct.
+analysis_data <- analysis_data %>%
+  mutate(
+
+    # 1. Main independent variable: census-tract population density
+    # The factor contains eight ordered-in-list categories "01" to "08".
+    # This is a categorical predictor: no numeric distance is inferred
+    # between adjacent population-density bands by factor().
+    density_band = factor(
+      HTPPOPDN,
+      levels = sprintf("%02d", 1:8)
+    ),
+
+    # 2. Employment status
+    # Assign readable text labels to the two permitted original codes.
+    # Because "01" is listed first, 'worker' is the default reference level
+    # in a treatment-coded regression unless relevelled later.
+    worker = factor(
+      WORKER,
+      levels = c("01", "02"),
+      labels = c("worker", "not_worker")
+    ),
+
+    # 3. Household vehicle ownership groups
+    # Use case_when() to combine numeric vehicle counts into three groups:
+    # no vehicles, exactly one, and two or more. The factor's first level
+    # ("0") becomes the reference category by default.
+    car_group = factor(
+      case_when(
+        vehicles == 0 ~ "0",
+        vehicles == 1 ~ "1",
+        vehicles >= 2 ~ "2+"
+      ),
+      levels = c("0", "1", "2+")
+    ),
+
+    # 4. Day of the week for the travel survey
+    # Map the seven source weekday codes onto named days.
+    # Confirm the original 01=Sunday ... 07=Saturday mapping in the codebook;
+    # if these source codes differ, all resulting day names would be wrong.
+    day_of_week = factor(
+      TRAVDAY,
+      levels = sprintf("%02d", 1:7),
+      labels = c(
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday"
+      )
+    ),
+
+    # 5. Survey period
+    # Preserve observed survey-date identifiers as discrete categories.
+    # This is not a Date object; no chronological arithmetic is performed.
+    survey_period = factor(TDAYDATE),
+
+    # 6. Census region
+    # Treat census region as a categorical regional control variable.
+    census_region = factor(CENSUS_R),
+
+    # 7. Convert miles to kilometres
+    # One mile equals exactly 1.609344 kilometres.
+    # This changes measurement units, not the people included in analysis.
+    mean_trip_km = mean_trip_miles * 1.609344,
+
+    # 8. Precompute a log-transformed version
+    # log1p(x) computes ln(1 + x), allowing x = 0 (result = 0).
+    # Here x is measured in miles; the log of km would be numerically
+    # different. Keep the choice of outcome units consistent in reporting.
+    log_mean_trip = log1p(mean_trip_miles)
+  )
+
+# Preview the first six rows of the newly recoded variables.
+# The original dataset is unchanged by select() and head(); they are used
+# solely to display a compact subset for inspection.
+# Also review factor frequencies and NA counts before regression.
+head(select(analysis_data,
+    density_band,
+    worker,
+    car_group,
+    day_of_week,
+    survey_period,
+    census_region,
+    mean_trip_km,
+    log_mean_trip))
+```
+
+
+```{r}
+# ==================================================
+# Final check A: Sample sizes
+# ==================================================
+
+# Number of eligible adult travellers
+# nrow() is the current analysis sample size, after all exclusions.
+# A person-level analysis should have one row per unique person key.
+nrow(analysis_data)
+
+# Number of distinct households
+# n_distinct() counts unique household identifiers; multiple people
+# from the same household count as one household.
+n_distinct(analysis_data$HOUSEID)
+
+# Number of distinct people
+# Count unique combinations, not unique PERSONID values alone.
+# Person identifiers may be reused across different households.
+n_distinct(
+  analysis_data$HOUSEID,
+  analysis_data$PERSONID
+)
+
+# Check for duplicate records for the same person
+# Expected output is 0. A nonzero result means the person-level
+# analysis dataset contains duplicate household/person keys.
+anyDuplicated(
+  analysis_data[c("HOUSEID", "PERSONID")]
+)
+```
+
+
+```{r}
+# ==================================================
+# Final check B: Dependent variable
+# ==================================================
+
+# Main dependent variable: the mean distance per recorded trip for each
+# eligible adult, expressed in miles. Inspect distribution and extremes.
+summary(analysis_data$mean_trip_miles)
+
+# Count missing dependent-variable values; expected to be zero after
+# the complete-distance restriction in Step 14.
+sum(is.na(analysis_data$mean_trip_miles))
+
+# Check for impossible negative mean distances; expected count is zero.
+sum(analysis_data$mean_trip_miles < 0)
+
+# Zero means are allowed by this workflow; record how frequent they are.
+sum(analysis_data$mean_trip_miles == 0)
+
+# Quantiles locate the 25th, 50th, 75th, 95th, and 99th percentiles.
+# They are useful for detecting a long right tail in trip distances.
+# na.rm = TRUE ignores missing data when calculating these cutoffs.
+quantile(
+  analysis_data$mean_trip_miles,
+  probs = c(0.25, 0.5, 0.75, 0.95, 0.99),
+  na.rm = TRUE
+)
+```
+
+
+```{r}
+# ==================================================
+# Final check C: Population density
+# ==================================================
+
+# Show the number of analysed people and distinct households
+# in each population-density band. Very small groups can produce
+# unstable model estimates and should be reported.
+analysis_data %>%
+  group_by(density_band) %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    .groups = "drop"
+  )
+```
+
+
+
+```{r}
+# ==================================================
+# Final check D: Feasibility of interaction analysis
+# ==================================================
+
+# Cross-tabulate density groups against vehicle-ownership groups.
+# pivot_wider() converts the long counts into one column per car group.
+# values_fill = 0 fills absent group combinations with explicit zeros.
+# Empty/small cells may limit interaction-model precision.
+analysis_data %>%
+  count(
+    density_band,
+    car_group
+  ) %>%
+  pivot_wider(
+    names_from = car_group,
+    values_from = n,
+    values_fill = 0
+  )
+```
+
+
+```{r}
+# ==================================================
+# Final check E: Sample selection flow
+# ==================================================
+
+# Build a transparent sample-flow table for methods reporting.
+# Each row corresponds to a sequential sample-selection checkpoint.
+# The list of remaining_n entries MUST follow the same order as step.
+# These are counts of people (not trip rows).
+sample_flow <- tibble(
+  step = c(
+    "All respondents",
+    "Adults aged 18+",
+    "Adult travellers",
+    "Complete trip distances",
+    "Valid population density",
+    "Valid core covariates"
+  ),
+
+  remaining_n = c(
+    nrow(person),
+    nrow(adult),
+    nrow(traveller),
+    nrow(complete_distance),
+    nrow(known_density),
+    nrow(analysis_data)
+  )
+) %>%
+  mutate(
+    # lag() shifts the previous stage's remaining count down by one row.
+    # Current excluded_n = previous_remaining - current_remaining.
+    # default = first(...) makes the initial excluded count equal to zero.
+    excluded_n = lag(
+      remaining_n,
+      default = first(remaining_n)
+    ) - remaining_n,
+
+    # Calculate the share of the original person sample retained at
+    # each stage. round(..., 2) keeps two decimal places for reporting.
+    retained_percent = round(
+      100 * remaining_n / first(remaining_n),
+      2
+    )
+  )
+
+# Display the full sample flow, including exclusions at each stage.
+# Save this table later so the numbers can be used in the report.
+print(sample_flow)
+```
+
+```{r}
+# ==================================================
+# Save outputs
+# ==================================================
+
+# Output paths are now aligned with the input-path convention above:
+# ../data/processed and ../tables are located in the project root.
+# This assumes the current working directory is the project's R/ folder.
+# If you run from a different directory, check getwd() first.
+# Create the processed directory if it does not exist
+dir.create(
+  "../data/processed",
+  # recursive = TRUE can create missing parent directories.
+  # showWarnings = FALSE avoids a warning when the folder already exists.
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# Make a separate output folder for tables used in the report.
+dir.create(
+  "../tables",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# saveRDS() preserves R-specific types such as factors and numeric columns.
+# Later, readRDS() can restore analysis_data without re-importing CSV text.
+# Save in the native R data format
+saveRDS(
+  analysis_data,
+  "../data/processed/analysis_data.rds"
+)
+
+# write_csv() creates a portable, human-readable table, but factor
+# level metadata is not retained as it is in an RDS file.
+# Also save as CSV for manual inspection
+write_csv(
+  analysis_data,
+  "../data/processed/analysis_data.csv"
+)
+
+# Export the sample-flow audit, including counts and percentages,
+# for use in the methodology and data-cleaning section of the paper.
+# Save the sample selection table
+write_csv(
+  sample_flow,
+  "../tables/sample_flow.csv"
+)
+```

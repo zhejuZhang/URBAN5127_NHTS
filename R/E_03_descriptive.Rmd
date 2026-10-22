@@ -1,0 +1,1079 @@
+---
+title: "03_descriptive_EDA"
+output: html_document
+date: "2026-10-22"
+---
+
+# Stage 3: Descriptive Statistics and Exploratory Data Analysis
+
+This R Markdown notebook extracts the **executable R code** from the supplied Stage 3 tutorial and arranges it like the Stage 2 data-cleaning notebook. It covers Steps **18–22** for adult travellers in the 2022 NextGen NHTS. All code comments and output labels are in English.
+
+**Input:** `data/processed/analysis_data.rds` produced by Stage 2. **Outputs:** CSV summaries in `tables/` and 300-DPI PNG figures in `figures/`. The notebook detects whether it is executed from the project root or from the `R/` subdirectory to avoid path errors when switching between RStudio and VSCode.
+
+**Scope:** The main comparisons are descriptive and unweighted; they cannot establish statistical significance or a causal effect of population density. The optional weighted mean block does not account for survey-design variance. The expected group counts embedded below are reference checkpoints, not results verified in this file.
+
+```{r setup, include=FALSE}
+# Display R commands in the knitted HTML report while hiding this setup chunk.
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data loading and pre-analysis validation
+
+### Load packages and the Stage 2 dataset
+
+```{r import_data}
+# ==================================================
+# Load packages and the Stage 2 dataset
+# ==================================================
+# library(tidyverse) loads readr, dplyr, tidyr and ggplot2 for this stage.
+# Find the project root by testing both possible working directories:
+# RStudio often knits from R/, whereas VSCode may run from the project root.
+# readRDS() restores the cleaned person-level data created in Stage 2.
+# Each row should represent an individual adult traveller, not an individual trip.
+# dim(), glimpse(), nrow(), n_distinct() and anyDuplicated() provide initial checks.
+
+# Load the Tidyverse tools used throughout the stage.
+library(tidyverse)
+
+# First check whether the working directory is R/; otherwise check the root.
+# Stop with a useful message if neither location contains the Stage 2 output.
+if (file.exists("../data/processed/analysis_data.rds")) {
+  project_root <- ".."
+} else if (file.exists("data/processed/analysis_data.rds")) {
+  project_root <- "."
+} else {
+  stop("Cannot find data/processed/analysis_data.rds. Check the working directory and Stage 2 output.")
+}
+
+# Construct paths with file.path() so they work on Windows and macOS.
+input_file <- file.path(project_root, "data", "processed", "analysis_data.rds")
+figures_dir <- file.path(project_root, "figures")
+tables_dir <- file.path(project_root, "tables")
+
+# Create output folders once; existing folders are left unchanged.
+dir.create(figures_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(tables_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Restore Stage 2's cleaned person-level records and inspect their structure.
+analysis_data <- readRDS(input_file)
+cat("Project root:", normalizePath(project_root), "\n")
+cat("Input dataset:", normalizePath(input_file), "\n")
+# Inspect number of rows and variables.
+dim(analysis_data)
+glimpse(analysis_data)
+
+# Report sample size, number of households, and duplicate person keys.
+cat("Person records:", nrow(analysis_data), "\n")
+cat("Distinct households:", n_distinct(analysis_data$HOUSEID), "\n")
+cat("Duplicate person-key index (expect 0):", anyDuplicated(
+  analysis_data[c("HOUSEID", "PERSONID")]
+), "\n")
+```
+
+### Confirm required columns and valid outcome values
+
+```{r validate_variables}
+# ==================================================
+# Confirm required columns and valid outcome values
+# ==================================================
+# required_vars lists the columns needed for the analyses below.
+# %in% checks membership in names(analysis_data); all() requires every name to exist.
+# stopifnot() stops knitting if a required field is missing or validation fails.
+# is.finite() rules out NA, NaN and infinite distances; zero is allowed.
+# This verifies basic integrity but does NOT prove representativeness or causal validity.
+
+# The code below relies on each of these original or recoded variables.
+required_vars <- c(
+  "HOUSEID",
+  "PERSONID",
+  "mean_trip_miles",
+  "density_band",
+  "age",
+  "worker",
+  "hh_size",
+  "vehicles",
+  "car_group",
+  "day_of_week",
+  "person_weight"
+)
+# Fail early rather than generate misleading summaries when checks are violated.
+stopifnot(
+  all(required_vars %in% names(analysis_data))
+)
+stopifnot(
+  all(is.finite(analysis_data$mean_trip_miles)),
+  all(analysis_data$mean_trip_miles >= 0),
+  !anyNA(analysis_data$density_band)
+)
+```
+
+## Step 18 - Overall descriptive statistics
+
+### Step 18.1 - Describe the dependent variable
+
+```{r step_18_1}
+# ==================================================
+# Step 18.1 - Describe the dependent variable
+# ==================================================
+# One row per person means n() measures the number of adult travellers.
+# n_distinct(HOUSEID) counts unique households represented in the sample.
+# mean(), median() and sd() describe central tendency and dispersion.
+# quantile() calculates the selected percentiles; the upper percentiles reveal long tails.
+# zero_n counts exactly zero person-level means; zero_pct expresses the share in percent.
+# These are unweighted descriptive statistics unless explicitly stated otherwise.
+
+# Build the overall dependent-variable descriptive statistics table.
+y_summary <- analysis_data %>%
+  summarise(
+    # Count persons in the cleaned sample.
+    n = n(),
+    # Count distinct household IDs.
+    households = n_distinct(HOUSEID),
+    # Arithmetic mean of the personal mean trip distances.
+    mean_miles = mean(mean_trip_miles),
+    # Median, which is more robust to extreme long-distance observations.
+    median_miles = median(mean_trip_miles),
+    # Standard deviation measures variation among respondents.
+    sd_miles = sd(mean_trip_miles),
+    min_miles = min(mean_trip_miles),
+    q1_miles = quantile(
+      mean_trip_miles, 0.25
+    ),
+    q3_miles = quantile(
+      mean_trip_miles, 0.75
+    ),
+    p95_miles = quantile(
+      mean_trip_miles, 0.95
+    ),
+    p99_miles = quantile(
+      mean_trip_miles, 0.99
+    ),
+    max_miles = max(mean_trip_miles),
+    # Count zero mean-trip-distance records.
+    zero_n = sum(mean_trip_miles == 0),
+    zero_pct = 100 * mean(
+      mean_trip_miles == 0
+    )
+  )
+print(y_summary, width = Inf)
+```
+
+### Step 18.1 - Additional percentile check
+
+```{r step_18_1_quantiles}
+# ==================================================
+# Step 18.1 - Additional percentile check
+# ==================================================
+# probs specifies the percentiles to report as values between zero and one.
+# P95 is a threshold below which approximately 95% of observations fall.
+
+quantile(
+  analysis_data$mean_trip_miles,
+  probs = c(0.25, 0.5, 0.75, 0.95, 0.99)
+)
+```
+
+### Step 18.2 - Summarise continuous covariates
+
+```{r step_18_2}
+# ==================================================
+# Step 18.2 - Summarise continuous covariates
+# ==================================================
+# select() keeps the outcome and three numeric covariates for this summary.
+# pivot_longer() converts columns into variable/value rows so one group-by works for all.
+# group_by(variable) makes summarise() compute separate statistics by variable.
+# na.rm = TRUE excludes missing observations from each numeric calculation.
+# n here counts non-missing observations; it can differ by variable.
+
+# Produce a compact Table 1-style summary for all four numeric variables.
+continuous_summary <- analysis_data %>%
+  select(
+    mean_trip_miles,
+    age,
+    hh_size,
+    vehicles
+  ) %>%
+  # Change from wide data to one variable/value pair per row.
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  group_by(variable) %>%
+  summarise(
+    n = sum(!is.na(value)),
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    q1 = quantile(
+      value, 0.25, na.rm = TRUE
+    ),
+    q3 = quantile(
+      value, 0.75, na.rm = TRUE
+    ),
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+print(continuous_summary)
+```
+
+### Step 18.3 - Employment status frequencies
+
+```{r step_18_3_worker}
+# ==================================================
+# Step 18.3 - Employment status frequencies
+# ==================================================
+# count(worker) returns one row per observed employment-status category.
+# n is the category sample count, and n / sum(n) is its unweighted sample share.
+
+worker_summary <- analysis_data %>%
+  count(worker) %>%
+  mutate(
+    percentage = 100 * n / sum(n)
+  )
+print(worker_summary)
+```
+
+### Step 18.3 - Household vehicle group frequencies
+
+```{r step_18_3_car}
+# ==================================================
+# Step 18.3 - Household vehicle group frequencies
+# ==================================================
+# car_group was defined during Stage 2 as zero, one, or two-plus vehicles.
+# These proportions describe the analysis sample, not population-wide shares.
+
+car_summary <- analysis_data %>%
+  count(car_group) %>%
+  mutate(
+    percentage = 100 * n / sum(n)
+  )
+print(car_summary)
+```
+
+### Step 18.3 - Survey weekday frequencies
+
+```{r step_18_3_weekday}
+# ==================================================
+# Step 18.3 - Survey weekday frequencies
+# ==================================================
+# The day_of_week factor preserves the sequence of days defined in Stage 2.
+# Inspect sample balance across weekdays because travel patterns may vary by day.
+
+day_summary <- analysis_data %>%
+  count(day_of_week) %>%
+  mutate(
+    percentage = 100 * n / sum(n)
+  )
+print(day_summary)
+```
+
+## Step 19 - Descriptive statistics by residential density
+
+### Step 19.1 - Count travellers by population-density category
+
+```{r step_19_1}
+# ==================================================
+# Step 19.1 - Count travellers by population-density category
+# ==================================================
+# density_band is an eight-category factor defined from the original NHTS coding.
+# count() gives the number of persons per band; percentage gives sample share.
+# expected_count comes from the reference plan, not calculations in this session.
+# Review the comparison table if your actual selection criteria differ.
+# Do not replace observed counts with reference counts.
+
+density_count <- analysis_data %>%
+  count(density_band, name = "persons") %>%
+  mutate(
+    percentage = 100 * persons / sum(persons)
+  )
+print(density_count)
+sum(density_count$persons)
+# Reference counts are checkpoints from the supplied study plan, not imposed targets.
+expected_count <- c(
+  1139, 1330, 772, 1272,
+  1916, 1920, 438, 265
+)
+data.frame(
+  density_band = density_count$density_band,
+  actual = density_count$persons,
+  expected = expected_count,
+  difference = density_count$persons - expected_count
+)
+```
+
+### Step 19.2 - Compare trip distance across density bands
+
+```{r step_19_2}
+# ==================================================
+# Step 19.2 - Compare trip distance across density bands
+# ==================================================
+# group_by(density_band) makes one summary row for each population-density group.
+# Each person contributes their own mean trip distance once to the group summary.
+# This differs from a trip-weighted mean using every raw trip as a separate row.
+# The mean is sensitive to long-distance outliers; median and percentiles add context.
+# The counts and means are unweighted at this point.
+
+# Compute eight density-specific rows using the original unweighted person-level means.
+density_summary <- analysis_data %>%
+  group_by(density_band) %>%
+  summarise(
+    # Number of adult travellers in this population-density group.
+    persons = n(),
+    # Distinct households in the group; people sharing households are not independent.
+    households = n_distinct(HOUSEID),
+    # Group mean across individual person-level mean trip distances.
+    mean_miles = mean(mean_trip_miles),
+    # Median across individual person-level mean trip distances.
+    median_miles = median(mean_trip_miles),
+    sd_miles = sd(mean_trip_miles),
+    q1_miles = quantile(
+      mean_trip_miles, 0.25
+    ),
+    q3_miles = quantile(
+      mean_trip_miles, 0.75
+    ),
+    p95_miles = quantile(
+      mean_trip_miles, 0.95
+    ),
+    # Count exactly-zero person-level means.
+    zero_n = sum(mean_trip_miles == 0),
+    zero_pct = 100 * mean(
+      mean_trip_miles == 0
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    sample_pct = 100 * persons / sum(persons)
+  )
+print(density_summary, width = Inf)
+```
+
+The values above are **person-weighted equally**, because each respondent appears once. They are not derived from pooling all original trip rows.
+
+### Step 19.3 - Examine zero-distance observations by density
+
+```{r step_19_3}
+# ==================================================
+# Step 19.3 - Examine zero-distance observations by density
+# ==================================================
+# Reuse density_summary rather than recomputing values from raw observations.
+# A zero person-level mean is retained by the cleaning plan and shown separately.
+
+zero_by_density <- density_summary %>%
+  select(
+    density_band,
+    persons,
+    zero_n,
+    zero_pct
+  )
+print(zero_by_density)
+```
+
+### Optional - Compare weighted and unweighted density means
+
+This additional sensitivity check may be omitted from the final paper, but the code is included so it can be reproduced.
+
+```{r step_19_weighted}
+# ==================================================
+# Optional - Compare weighted and unweighted density means
+# ==================================================
+# weighted.mean() applies the supplied person_weight to the person-level outcome.
+# This provides weighted point estimates only, not survey-design-based standard errors.
+# Use proper complex-survey methods for inferential standard errors when needed.
+
+weighted_density_summary <- analysis_data %>%
+  group_by(density_band) %>%
+  summarise(
+    unweighted_mean = mean(mean_trip_miles),
+    weighted_mean = weighted.mean(
+      mean_trip_miles,
+      w = person_weight
+    ),
+    .groups = "drop"
+  )
+print(weighted_density_summary)
+```
+
+## Step 20 - Distribution plots for the dependent variable
+
+### Step 20.1 - Histogram of the full outcome distribution
+
+```{r step_20_1}
+# ==================================================
+# Step 20.1 - Histogram of the full outcome distribution
+# ==================================================
+# ggplot() declares the dataset; aes() maps the outcome to the horizontal axis.
+# geom_histogram(bins = 60) builds a frequency histogram across 60 bins.
+# A long right tail can compress most observations near zero in a full-scale plot.
+# print() displays the stored plot in both interactive and knitted sessions.
+
+# Save the plot object for on-screen review and later PNG export.
+p_hist_full <- ggplot(
+  analysis_data,
+  aes(x = mean_trip_miles)
+) +
+  # Choose the number of bins rather than filtering out outliers.
+  geom_histogram(
+    bins = 60,
+    colour = "white"
+  ) +
+  labs(
+    title = "Distribution of Mean Trip Distance",
+    subtitle = "2022 NHTS adult travellers",
+    x = "Mean trip distance (miles)",
+    y = "Number of travellers",
+    caption = "Source: 2022 NextGen NHTS V2.1"
+  ) +
+  theme_minimal(base_size = 12)
+print(p_hist_full)
+```
+
+### Step 20.2 - Zoom the histogram to 0-60 miles
+
+```{r step_20_2}
+# ==================================================
+# Step 20.2 - Zoom the histogram to 0-60 miles
+# ==================================================
+# binwidth = 2 creates two-mile histogram bins; boundary = 0 anchors the breaks.
+# coord_cartesian(xlim = c(0, 60)) changes what is visible, not the dataset.
+# The observations beyond 60 miles are still kept for all statistical calculations.
+
+p_hist_zoom <- ggplot(
+  analysis_data,
+  aes(x = mean_trip_miles)
+) +
+  geom_histogram(
+    binwidth = 2,
+    boundary = 0,
+    colour = "white"
+  ) +
+  # Zoom the display only: no observations are deleted from analysis_data.
+  coord_cartesian(
+    xlim = c(0, 60)
+  ) +
+  labs(
+    title = "Mean Trip Distance: 0–60 Miles",
+    x = "Mean trip distance (miles)",
+    y = "Number of travellers",
+    caption = paste(
+      "Display restricted to 0–60 miles.",
+      "Observations outside this range",
+      "remain in the analysis dataset."
+    )
+  ) +
+  theme_minimal(base_size = 12)
+print(p_hist_zoom)
+```
+
+### Illustration only - Filtering would create a different subset
+
+The following snippet is retained from the tutorial for comparison only. It is not part of the analytical workflow, so the chunk uses `eval=FALSE`.
+
+```{r illustration_filter_only, eval=FALSE}
+# ==================================================
+# Illustration only - Filtering would create a different subset
+# ==================================================
+# This original tutorial example is explanatory and is intentionally NOT executed.
+# filter() would exclude rows above 60 miles from the returned dataset.
+# It must not replace the main analysis_data just to make a plot look clearer.
+
+# Contrast only: filtering would create a different analysis subset.
+analysis_data %>%
+  filter(mean_trip_miles <= 60)
+```
+
+### Step 20.2 - Count observations beyond the displayed range
+
+```{r step_20_2_outside}
+# ==================================================
+# Step 20.2 - Count observations beyond the displayed range
+# ==================================================
+# Quantify how many observations fall outside the 0-60-mile display range.
+# The percentage can be cited in a caption to document the visible truncation.
+
+analysis_data %>%
+  summarise(
+    n_above_60 = sum(mean_trip_miles > 60),
+    pct_above_60 = 100 * mean(
+      mean_trip_miles > 60
+    )
+  )
+```
+
+### Step 20.3 - Histogram of log(1 + mean trip miles)
+
+```{r step_20_3}
+# ==================================================
+# Step 20.3 - Histogram of log(1 + mean trip miles)
+# ==================================================
+# log1p(x) computes ln(1 + x) and is defined for a zero distance.
+# The source analysis uses miles, so the transformed unit must be documented.
+# This transformation compresses extreme values; it does not establish OLS assumptions.
+
+# Log transform the person-level outcome for exploratory visualisation.
+p_hist_log <- ggplot(
+  analysis_data,
+  aes(x = log1p(mean_trip_miles))
+) +
+  geom_histogram(
+    bins = 50,
+    colour = "white"
+  ) +
+  labs(
+    title = "Distribution of Log-Transformed Trip Distance",
+    subtitle = "Using ln(1 + miles)",
+    x = "ln(1 + mean trip distance in miles)",
+    y = "Number of travellers"
+  ) +
+  theme_minimal(base_size = 12)
+print(p_hist_log)
+```
+
+### Save the Stage 20 distribution figures
+
+```{r export_figure_1}
+# ==================================================
+# Save the Stage 20 distribution figures
+# ==================================================
+# ggsave() writes high-resolution PNG files for report preparation.
+# width and height are measured in inches, and dpi controls raster resolution.
+# All outputs go to the figures/ directory located at the project root.
+
+ggsave(
+  filename = file.path(figures_dir, "Figure_1a_full_distribution.png"),
+  plot = p_hist_full,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+ggsave(
+  filename = file.path(figures_dir, "Figure_1b_zoomed_distribution.png"),
+  plot = p_hist_zoom,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+ggsave(
+  filename = file.path(figures_dir, "Figure_1c_log_distribution.png"),
+  plot = p_hist_log,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+```
+
+## Step 21 - Density and trip-distance visualisations
+
+### Step 21 - Define readable population-density axis labels
+
+```{r step_21_labels}
+# ==================================================
+# Step 21 - Define readable population-density axis labels
+# ==================================================
+# Names such as "01" and "02" refer to the categorical codes in density_band.
+# Labels display people per square mile and do not alter the source variable.
+# The "25,000+" label abbreviates the top category; consult the codebook for bounds.
+
+# Map 01-08 factor codes to human-readable population-density ranges.
+density_labels <- c(
+  "01" = "0–99",
+  "02" = "100–499",
+  "03" = "500–999",
+  "04" = "1,000–1,999",
+  "05" = "2,000–3,999",
+  "06" = "4,000–9,999",
+  "07" = "10,000–24,999",
+  "08" = "25,000+"
+)
+```
+
+### Step 21.1 - Boxplot of outcome by population density
+
+```{r step_21_1}
+# ==================================================
+# Step 21.1 - Boxplot of outcome by population density
+# ==================================================
+# Each box describes the median and interquartile range of person-level means.
+# geom_boxplot() marks potential outliers according to the boxplot rule.
+# coord_cartesian() limits only the plotted y-axis to 0-60 miles.
+# Overlapping boxes show descriptive overlap, not a statistical significance test.
+
+p_density_box <- ggplot(
+  analysis_data,
+  aes(
+    x = density_band,
+    y = mean_trip_miles
+  )
+) +
+  # Box = IQR, central line = median; points beyond whiskers are shown as outliers.
+  geom_boxplot(
+    outlier.alpha = 0.15,
+    outlier.size = 0.6
+  ) +
+  coord_cartesian(
+    ylim = c(0, 60)
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Mean Trip Distance by Residential Population Density",
+    subtitle = "Adult travellers in the 2022 NHTS",
+    x = "Population density (persons per sq. mile)",
+    y = "Mean trip distance (miles)",
+    caption = paste(
+      "Source: 2022 NextGen NHTS V2.1.",
+      "Vertical display limited to 0–60 miles."
+    )
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+print(p_density_box)
+```
+
+### Step 21.2 - Boxplot with a log-transformed outcome
+
+```{r step_21_2}
+# ==================================================
+# Step 21.2 - Boxplot with a log-transformed outcome
+# ==================================================
+# Plot ln(1 + miles) as an alternative view of long-tailed outcomes.
+# The categorical density groups remain unchanged.
+# Because units are transformed, this should be explained clearly in figure text.
+
+p_density_log_box <- ggplot(
+  analysis_data,
+  aes(
+    x = density_band,
+    y = log1p(mean_trip_miles)
+  )
+) +
+  geom_boxplot(
+    outlier.alpha = 0.15,
+    outlier.size = 0.6
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Trip Distance by Population Density",
+    subtitle = "Log-transformed mean trip distance",
+    x = "Population density (persons per sq. mile)",
+    y = "ln(1 + mean trip distance in miles)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+print(p_density_log_box)
+```
+
+### Step 21.3 - Compare group means and medians
+
+```{r step_21_3}
+# ==================================================
+# Step 21.3 - Compare group means and medians
+# ==================================================
+# select() extracts the two statistics from the Step 19 summary.
+# pivot_longer() prepares the data in long format for a single ggplot call.
+# recode() replaces internal column names with readable legend labels.
+# position_dodge() separates mean and median points within each density group.
+
+# Reshape group summary statistics into a format ggplot can map to a legend.
+density_compare <- density_summary %>%
+  select(
+    density_band,
+    mean_miles,
+    median_miles
+  ) %>%
+  pivot_longer(
+    cols = c(mean_miles, median_miles),
+    names_to = "statistic",
+    values_to = "distance"
+  ) %>%
+  mutate(
+    statistic = recode(
+      statistic,
+      mean_miles = "Mean",
+      median_miles = "Median"
+    )
+  )
+# Compare mean versus median without inferring causal effects.
+p_density_compare <- ggplot(
+  density_compare,
+  aes(
+    x = density_band,
+    y = distance,
+    colour = statistic
+  )
+) +
+  geom_point(
+    position = position_dodge(width = 0.4),
+    size = 3
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Mean and Median Trip Distance by Density",
+    x = "Population density (persons per sq. mile)",
+    y = "Trip distance (miles)",
+    colour = "Statistic"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+print(p_density_compare)
+```
+
+### Save population-density comparison figures
+
+```{r export_figure_2}
+# ==================================================
+# Save population-density comparison figures
+# ==================================================
+# Store all three exploratory plots, even if the final paper presents only one.
+# PNG resolution is 300 DPI to support inclusion in a research report.
+
+ggsave(
+  file.path(figures_dir, "Figure_2a_density_boxplot.png"),
+  plot = p_density_box,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+ggsave(
+  file.path(figures_dir, "Figure_2b_density_log_boxplot.png"),
+  plot = p_density_log_box,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+ggsave(
+  file.path(figures_dir, "Figure_2c_density_mean_median.png"),
+  plot = p_density_compare,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+```
+
+## Step 22 - Multivariable exploratory comparisons
+
+### Step 22.1 - Compare density categories by employment status
+
+```{r step_22_1}
+# ==================================================
+# Step 22.1 - Compare density categories by employment status
+# ==================================================
+# Cross-classify population density and worker status to inspect group profiles.
+# Summarise both sample size and distinct household count for context.
+# This is descriptive: differences do not imply interactions are significant or causal.
+
+# Cross-classify the sample by both density and employment status.
+worker_density <- analysis_data %>%
+  group_by(
+    density_band,
+    worker
+  ) %>%
+  summarise(
+    n = n(),
+    households = n_distinct(HOUSEID),
+    mean_miles = mean(mean_trip_miles),
+    median_miles = median(mean_trip_miles),
+    .groups = "drop"
+  )
+print(worker_density)
+```
+
+### Step 22.1 - Draw the employment-status comparison plot
+
+```{r step_22_1_plot}
+# ==================================================
+# Step 22.1 - Draw the employment-status comparison plot
+# ==================================================
+# Plot median travel distance for workers and non-workers within each density group.
+# Colour distinguishes categories; dodge prevents markers from overlapping.
+# Sparse groups should be interpreted cautiously before any interaction modelling.
+
+p_worker <- ggplot(
+  worker_density,
+  aes(
+    x = density_band,
+    y = median_miles,
+    colour = worker
+  )
+) +
+  geom_point(
+    position = position_dodge(width = 0.4),
+    size = 3
+  ) +
+  scale_x_discrete(
+    labels = density_labels
+  ) +
+  labs(
+    title = "Median Trip Distance by Density and Work Status",
+    x = "Population density (persons per sq. mile)",
+    y = "Median trip distance (miles)",
+    colour = "Work status"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+print(p_worker)
+```
+
+### Step 22.2 - Create density-by-vehicle sample counts
+
+```{r step_22_2}
+# ==================================================
+# Step 22.2 - Create density-by-vehicle sample counts
+# ==================================================
+# count(density_band, car_group, .drop = FALSE) includes zero-count combinations.
+# pivot_wider() turns vehicle classes into columns to produce a cross-tabulation.
+# Inspect small cells before considering complex density-by-car interaction terms.
+
+# Retain missing combinations of factor levels as explicit 0-count cells.
+car_density_count <- analysis_data %>%
+  count(
+    density_band,
+    car_group,
+    .drop = FALSE,
+    name = "n"
+  )
+# Make a wide-format, readable cross-tabulation.
+car_density_table <- car_density_count %>%
+  pivot_wider(
+    names_from = car_group,
+    values_from = n,
+    values_fill = 0
+  )
+print(car_density_table)
+```
+
+Small cross-classification cells suggest caution before fitting interactions in later regression stages.
+
+### Step 22.2 - Heatmap of sample sizes for interaction cells
+
+```{r step_22_2_heatmap}
+# ==================================================
+# Step 22.2 - Heatmap of sample sizes for interaction cells
+# ==================================================
+# geom_tile() colours each density-by-vehicle cell according to respondent count.
+# geom_text(aes(label = n)) prints the counts inside the tiles.
+# Low counts can make interaction effects unstable even with a large total sample.
+
+car_density_count <- car_density_count %>%
+  mutate(
+    text_colour = if_else(
+      n < 650, "white", "black"
+    )
+  )
+
+p_car_heatmap <- ggplot(
+  car_density_count,
+  aes(
+    x = density_band,
+    y = car_group,
+    fill = n
+  )
+) +
+  geom_tile(colour = "white") +
+  geom_text(
+    aes(label = n, colour = text_colour),
+    size = 3.5
+  ) +
+  scale_colour_identity() +
+  scale_x_discrete(labels = density_labels) +
+  labs(
+    title = "Sample Counts by Density and Vehicle Ownership",
+    x = "Population density (persons per sq. mile)",
+    y = "Number of household vehicles",
+    fill = "Persons",
+    caption = "Counts represent adult travellers, not distinct households."
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+print(p_car_heatmap)
+```
+
+### Step 22.3 - Weekday-specific trip distance summaries
+
+```{r step_22_3}
+# ==================================================
+# Step 22.3 - Weekday-specific trip distance summaries
+# ==================================================
+# group_by(day_of_week) creates separate summaries for each survey weekday.
+# Median helps represent typical distances in a right-skewed distribution.
+
+weekday_summary <- analysis_data %>%
+  group_by(day_of_week) %>%
+  summarise(
+    n = n(),
+    mean_miles = mean(mean_trip_miles),
+    median_miles = median(mean_trip_miles),
+    .groups = "drop"
+  )
+print(weekday_summary)
+```
+
+### Step 22.3 - Bar chart of weekday medians
+
+```{r step_22_3_plot}
+# ==================================================
+# Step 22.3 - Bar chart of weekday medians
+# ==================================================
+# geom_col() draws bars from precomputed medians (rather than counting rows).
+# Use the plot to assess whether weekday controls are substantively relevant.
+
+p_weekday <- ggplot(
+  weekday_summary,
+  aes(
+    x = day_of_week,
+    y = median_miles
+  )
+) +
+  geom_col() +
+  labs(
+    title = "Median Trip Distance by Day of Week",
+    x = "Survey day",
+    y = "Median trip distance (miles)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+print(p_weekday)
+```
+
+### Save work-status, vehicle-ownership and weekday figures
+
+```{r export_figure_3_to_5}
+# ==================================================
+# Save work-status, vehicle-ownership and weekday figures
+# ==================================================
+# The filenames match the tutorial examples so outputs are easy to locate.
+# The three plot objects must exist from Steps 22.1 to 22.3 before saving.
+
+ggsave(
+  file.path(figures_dir, "Figure_3_work_status.png"),
+  plot = p_worker,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+ggsave(
+  file.path(figures_dir, "Figure_4_vehicle_heatmap.png"),
+  plot = p_car_heatmap,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+ggsave(
+  file.path(figures_dir, "Figure_5_weekday.png"),
+  plot = p_weekday,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+```
+
+## Export the summary tables and inspect saved files
+
+### Export the Stage 3 summary tables as CSV
+
+```{r export_tables}
+# ==================================================
+# Export the Stage 3 summary tables as CSV
+# ==================================================
+# write_csv() exports data frames for inspection, reporting, and later reuse.
+# The tables contain derived summaries; the person-level input RDS is unchanged.
+# All paths resolve under the project-root tables/ directory.
+
+# Export the computed table into the project-root tables directory.
+write_csv(
+  y_summary,
+  file.path(tables_dir, "01_dependent_variable_summary.csv")
+)
+write_csv(
+  continuous_summary,
+  file.path(tables_dir, "02_continuous_summary.csv")
+)
+write_csv(
+  worker_summary,
+  file.path(tables_dir, "03_worker_summary.csv")
+)
+write_csv(
+  car_summary,
+  file.path(tables_dir, "04_car_summary.csv")
+)
+write_csv(
+  density_summary,
+  file.path(tables_dir, "05_density_summary.csv")
+)
+write_csv(
+  zero_by_density,
+  file.path(tables_dir, "06_zero_distance_by_density.csv")
+)
+write_csv(
+  worker_density,
+  file.path(tables_dir, "07_density_by_work_status.csv")
+)
+write_csv(
+  car_density_count,
+  file.path(tables_dir, "08_density_by_vehicle_count.csv")
+)
+write_csv(
+  weekday_summary,
+  file.path(tables_dir, "09_weekday_summary.csv")
+)
+```
+
+### Inspect the generated table and figure filenames
+
+```{r verify_outputs}
+# ==================================================
+# Inspect the generated table and figure filenames
+# ==================================================
+# list.files() verifies what was written to the two output directories.
+# Run this only after the previous export chunks have completed.
+
+list.files(tables_dir)
+list.files(figures_dir)
+```
+
+## Interpretation reminders
+
+- Compare **means and medians**: strong differences may indicate a long right tail and sensitivity to extreme journeys.
+- Treat density codes **01–08 as categories**, not equally spaced numeric measurements of population density.
+- Keep the full analytical sample for inferential work. Display-only axis limits do not justify dropping long-distance observations.
+- Check sparse density-by-vehicle cells before considering interaction terms; also inspect the number of distinct households.
+- Report whether descriptive results are weighted or unweighted. A weighted mean alone does not supply complex-survey uncertainty estimates.
+

@@ -1,0 +1,934 @@
+---
+title: "04_regression"
+subtitle: "URBAN5127 - Stage 4: Hypothesis Tests and Multiple Linear Regression"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    code_folding: show
+    df_print: paged
+    theme: readable
+date: "2026-10-22"
+---
+
+# Stage 4: Hypothesis Testing and Multiple Linear Regression
+
+This notebook extracts and organises the **executable R code** from the supplied Stage 4 tutorial, covering **Steps 23–28** of the 2022 NextGen NHTS research plan. Like the earlier Stage 2 and Stage 3 notebooks, it includes small, separately runnable R chunks and detailed **English-only code comments**.
+
+**Input:** The cleaned person-level `data/processed/analysis_data.rds` saved by Stage 2. The file must contain one observation per adult traveller.
+
+**Main dependent variable:** `mean_trip_miles` (each individual's mean recorded trip distance, in miles).
+
+**Main independent variable:** `density_band` (eight census-tract population-density categories).
+
+**Main models:** M0 (baseline controls), M1 (M0 + density), and M2 (M1 + household vehicle ownership). Optional one-way ANOVA, two-group t-test, and M3 interaction-model code is included but **not evaluated by default**. For optional chunks, change `eval=FALSE` to `eval=TRUE` after checking the relevant assumptions and group sizes.
+
+**Output:** `model_data.rds` and `regression_models.rds` in `data/processed/`; CSV tables in `tables/`; and high-resolution PNG figures in `figures/`.
+
+**Interpretation:** This is observational, person-level regression analysis. The standard errors, F-tests and confidence intervals here are **conventional OLS results**. Heteroskedasticity, household clustering and survey design need to be addressed in later stages before making final inferential claims.
+
+```{r setup, include=FALSE}
+# Show R commands in the HTML output; keep informative warnings visible.
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = TRUE)
+```
+
+## Prepare the project and load the cleaned dataset
+
+This notebook handles the two typical working directories: the project root (common in VSCode) and the `R/` subfolder (common when knitting an R Markdown file in RStudio). Always open the `.Rproj` project when possible. Check that Stage 2 has already created `analysis_data.rds`.
+
+```{r load_clean_data}
+# library(tidyverse) attaches dplyr, tidyr, readr, ggplot2, etc.
+# readRDS() restores the full cleaned dataset, preserving factor levels.
+# file.path() avoids hard-coding / or \ separators across operating systems.
+# dim() returns number of rows and columns; n_distinct() counts unique households.
+
+# =====================================================
+# URBAN5127 - Stage 4
+# Multiple Linear Regression
+# =====================================================
+
+library(tidyverse)
+
+# Locate the Stage 2 RDS file from either the R/ folder or project root.
+if (file.exists("../data/processed/analysis_data.rds")) {
+  project_root <- ".."
+} else if (file.exists("data/processed/analysis_data.rds")) {
+  project_root <- "."
+} else {
+  stop("Cannot find data/processed/analysis_data.rds. Run Stage 2 and check the working directory.")
+}
+
+# Build platform-safe paths for reading and writing later outputs.
+input_file <- file.path(project_root, "data", "processed", "analysis_data.rds")
+processed_dir <- file.path(project_root, "data", "processed")
+tables_dir <- file.path(project_root, "tables")
+figures_dir <- file.path(project_root, "figures")
+
+# Create output directories without deleting any existing files.
+dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Read the cleaned person-level dataset; do NOT reload individual raw trip files.
+analysis_data <- readRDS(input_file)
+
+# Print important paths to help diagnose path problems in RStudio/VSCode.
+cat("Working directory:", getwd(), "\n")
+cat("Stage 2 input:", normalizePath(input_file), "\n")
+
+# Check sample size, household count and available column types.
+dim(analysis_data)
+nrow(analysis_data)
+n_distinct(analysis_data$HOUSEID)
+glimpse(analysis_data)
+```
+
+## Step 23: Hypotheses, common modelling sample and baseline model M0
+
+### Step 23.1 - Research hypotheses
+
+- **H1:** After controlling for baseline characteristics, at least one of the seven non-reference density coefficients differs from zero.
+- **H2:** Adding household car ownership to the density model may change the estimated conditional density associations; coefficient changes alone do not establish mediation.
+- **H3 (optional):** Associations between density and distance may differ across household car-ownership categories.
+
+### Step 23.2 - Build a common complete-case sample
+
+M0, M1 and M2 must use **identical people** so that nested model comparisons are meaningful. The following code creates `model_data`, checks its keys and centres age. It excludes rows with missing model variables; it does not automatically detect special negative survey codes, which must have been treated in Stage 2.
+
+```{r step_23_2_common_sample}
+# required_vars names the exact fields needed in every core regression model.
+# all(... %in% names(...)) confirms each field is present before analysis.
+# select(all_of(...)) keeps only modelling fields.
+# mutate(factor(...)) ensures density, employment, weekday and vehicles are treated as categories.
+# filter() keeps adults with valid non-negative travel distance, age and household size.
+# drop_na() removes rows incomplete on the selected modelling fields.
+# age_c subtracts the mean age: age_c = 0 represents mean sample age.
+# The final key check ensures each HOUSEID/PERSONID pair occurs only once.
+
+# =====================================================
+# Step 23.2: Build a common regression sample
+# =====================================================
+
+required_vars <- c(
+  "HOUSEID",
+  "PERSONID",
+  "mean_trip_miles",
+  "age",
+  "worker",
+  "hh_size",
+  "day_of_week",
+  "density_band",
+  "car_group"
+)
+
+stopifnot(
+  all(required_vars %in% names(analysis_data))
+)
+
+model_data <- analysis_data %>%
+  select(all_of(required_vars)) %>%
+  mutate(
+    density_band = factor(
+      as.character(density_band),
+      levels = sprintf("%02d", 1:8)
+    ),
+    worker = factor(worker),
+    day_of_week = factor(day_of_week),
+    car_group = factor(
+      as.character(car_group),
+      levels = c("0", "1", "2+")
+    )
+  ) %>%
+  filter(
+    is.finite(mean_trip_miles),
+    mean_trip_miles >= 0,
+    is.finite(age),
+    age >= 18,
+    is.finite(hh_size),
+    hh_size > 0
+  ) %>%
+  drop_na() %>%
+  mutate(
+    # Center age around the sample mean
+    age_c = age - mean(age)
+  )
+
+# Compare the original and model samples
+nrow(analysis_data)
+nrow(model_data)
+
+# Verify each person appears once
+stopifnot(
+  nrow(model_data) ==
+    n_distinct(
+      model_data$HOUSEID,
+      model_data$PERSONID
+    )
+)
+
+# Check sample counts
+model_data %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    mean_age = mean(age),
+    mean_distance = mean(mean_trip_miles)
+  )
+```
+
+### Step 23.3 - Set reference categories
+
+Regression coefficients for categorical predictors are comparisons with omitted *reference categories*. This code uses the lowest density band (`01`), non-workers, and one-car households as references. The reference level of `day_of_week` stays as stored in Stage 2 (usually Sunday), so inspect the printed factor levels first.
+
+```{r step_23_3_reference_levels}
+# levels() displays the possible factor categories.
+# relevel() changes only the reference group, NOT the individual observations.
+# Regression predictions and R-squared stay the same when only the reference changes.
+# Check group counts separately if a factor has unused levels.
+
+# =====================================================
+# Step 23.3: Set factor reference categories
+# =====================================================
+
+# First inspect the levels
+levels(model_data$density_band)
+levels(model_data$worker)
+levels(model_data$car_group)
+levels(model_data$day_of_week)
+
+# Verify the intended references exist
+stopifnot(
+  "01" %in% levels(model_data$density_band),
+  "not_worker" %in% levels(model_data$worker),
+  "1" %in% levels(model_data$car_group)
+)
+
+# Set reference categories
+model_data <- model_data %>%
+  mutate(
+    density_band = relevel(
+      density_band,
+      ref = "01"
+    ),
+
+    worker = relevel(
+      worker,
+      ref = "not_worker"
+    ),
+
+    car_group = relevel(
+      car_group,
+      ref = "1"
+    )
+  )
+```
+
+### Step 23.4 - Optional unadjusted tests
+
+The one-way ANOVA compares mean trip distance across the eight density categories without controls. The Welch t-test compares workers with non-workers. They are included as optional classroom exercises, **not** as substitutes for the adjusted regressions. Their conventional inference may be sensitive to the strongly skewed outcome and dependence within households. To run either chunk, enable its evaluation or run it manually.
+
+```{r optional_one_way_anova, eval=TRUE}
+# aov() fits a one-factor ANOVA; summary() displays the omnibus F-test.
+# Null hypothesis: all eight unadjusted group means are equal.
+
+# =====================================================
+# Optional: One-way ANOVA
+# =====================================================
+
+density_anova <- aov(
+  mean_trip_miles ~ density_band,
+  data = model_data
+)
+
+summary(density_anova)
+```
+
+```{r optional_welch_t_test, eval=TRUE}
+# t.test() performs the default Welch two-group t-test here.
+# This is an unadjusted worker versus non-worker comparison.
+
+t.test(
+  mean_trip_miles ~ worker,
+  data = model_data
+)
+```
+
+### Step 23.5 - Fit M0: baseline controls
+
+M0 includes centred age, centred age squared, worker status, household size and survey weekday. No density or car-ownership variables are included yet. The outcome remains in **miles**, so linear coefficients are differences in miles conditional on model covariates.
+
+```{r step_23_5_model_m0}
+# lm() estimates an ordinary least squares (OLS) regression.
+# I(age_c^2) creates the numerical square of the centred age variable.
+# worker and day_of_week are factors, so R creates reference-based contrasts.
+# summary() gives coefficients, standard errors, p-values, R-squared and residual scale.
+# confint() gives conventional model-based confidence intervals.
+# nobs() counts the rows actually used by the fitted model.
+
+# =====================================================
+# Step 23.5: Model M0 - Baseline controls
+# =====================================================
+
+m0 <- lm(
+  mean_trip_miles ~
+    age_c +
+    I(age_c^2) +
+    worker +
+    hh_size +
+    day_of_week,
+  data = model_data
+)
+
+# Regression output
+summary(m0)
+
+# Conventional confidence intervals
+confint(m0)
+
+# Number of observations actually used
+nobs(m0)
+```
+
+## Step 24: Add population density to obtain M1
+
+**M1 = M0 + density_band.** The lowest-density band (`01`) is the reference; the other seven density coefficients describe conditional differences from this group. Density is **categorical**, not an evenly spaced numeric predictor.
+
+```{r step_24_model_m1}
+# update(m0, . ~ . + density_band) reuses the existing M0 formula and adds density.
+# The dot on the left preserves the outcome; the dot on the right preserves M0 controls.
+# Compare coefficients relative to the omitted density-band 01 reference level.
+
+# =====================================================
+# Step 24: Model M1 - Add population density
+# =====================================================
+
+m1 <- update(
+  m0,
+  . ~ . + density_band
+)
+
+# Show regression results
+summary(m1)
+
+# Coefficient confidence intervals
+confint(m1)
+
+# Check sample size
+nobs(m1)
+```
+
+### Step 24.4 - Compare M0 and M1
+
+The nested-model partial F-test examines whether the seven density coefficients are **jointly** zero. This is a conventional OLS test; later stages should consider heteroskedastic and household-clustered inference.
+
+```{r step_24_m0_m1_anova}
+# anova(m0, m1) tests whether the added density factor improves fit under classical OLS assumptions.
+# Individual category p-values are not a substitute for the overall seven-degree-of-freedom test.
+
+# =====================================================
+# Compare M0 and M1
+# =====================================================
+
+anova(m0, m1)
+```
+
+## Step 25: Add household vehicle ownership to obtain M2
+
+**M2 = M1 + car_group.** The one-vehicle category is the reference, so the other estimates compare zero-car and two-or-more-car households against one-car households. Comparing M1 and M2 is descriptive evidence about **different conditional associations**, not proof of causal mediation.
+
+```{r step_25_model_m2}
+# Add the three-level car_group factor, producing two non-reference coefficients.
+# Print model summaries and conventional confidence intervals for preliminary interpretation.
+
+# =====================================================
+# Step 25: Model M2 - Add household vehicles
+# =====================================================
+
+m2 <- update(
+  m1,
+  . ~ . + car_group
+)
+
+# Regression results
+summary(m2)
+
+# Conventional confidence intervals
+confint(m2)
+
+# Check sample size
+nobs(m2)
+```
+
+### Step 25.3 - Test the added contribution of vehicle ownership
+
+```{r step_25_m1_m2_anova}
+# anova(m1, m2) tests whether the two additional car-group coefficients are jointly zero.
+# The comparison requires that the two models be fitted to identical observations.
+
+# =====================================================
+# Compare M1 and M2
+# =====================================================
+
+anova(m1, m2)
+```
+
+### Step 25.4 - Compare population-density coefficients in M1 and M2
+
+This table shows changes in point estimates after adding car ownership. A change in coefficients is **not** a causal mediation estimate.
+
+```{r step_25_4_density_coefficients}
+# coef() extracts estimated regression coefficients as a named vector.
+# grepl("^density_band", ...) identifies factor contrast terms for density only.
+# identical() confirms that coefficients align by category and order in both models.
+# unname() removes names for clean tibble columns; change is M2 minus M1.
+
+# =====================================================
+# Step 25.4: Compare density coefficients
+# =====================================================
+
+# Extract density coefficients
+density_m1 <- coef(m1)[
+  grepl("^density_band", names(coef(m1)))
+]
+
+density_m2 <- coef(m2)[
+  grepl("^density_band", names(coef(m2)))
+]
+
+# Confirm both models have the same density terms
+stopifnot(
+  identical(
+    names(density_m1),
+    names(density_m2)
+  )
+)
+
+# Build comparison table
+density_comparison <- tibble(
+  density_term = names(density_m1),
+
+  M1_estimate = unname(density_m1),
+
+  M2_estimate = unname(density_m2),
+
+  change = M2_estimate - M1_estimate
+)
+
+print(density_comparison)
+```
+
+## Step 26: Optional interaction-model extension (M3)
+
+### Step 26.2 - Inspect density-by-car group support
+
+An eight-level density factor crossed with three vehicle groups can produce sparse cells. Check **both people and distinct households** before considering an interaction model.
+
+```{r step_26_2_cell_support}
+# group_by() forms density-by-car cells.
+# n() counts individuals; n_distinct(HOUSEID) counts unique households in each cell.
+# Cells with very few observations can make interaction coefficients unstable.
+
+# =====================================================
+# Step 26.2: Check cell support
+# =====================================================
+
+interaction_support <- model_data %>%
+  group_by(density_band, car_group) %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    .groups = "drop"
+  )
+
+print(interaction_support, n = Inf)
+```
+
+### Steps 26.3-26.4 - Optional four-band M3
+
+The source tutorial suggests merging the eight density categories into four neighbouring bands and comparing a no-interaction model (M2_4) with an interaction model (M3_4). **Both chunks are disabled by default.** If cross-cell support and research justification are adequate, enable **both** chunks and then inspect `anova(m2_4, m3_4)`. This does not change the primary M0–M2 models.
+
+```{r optional_step_26_3_density4, eval=TRUE}
+# case_when() combines old density bands: 01-02 -> D1; 03-04 -> D2;
+# 05-06 -> D3; 07-08 -> D4, preserving their order as a factor.
+# Stop when unexpected missing density groups appear, then inspect cell counts.
+
+# =====================================================
+# Step 26.3: Create four density groups
+# =====================================================
+
+model_data <- model_data %>%
+  mutate(
+    density_4 = case_when(
+      as.character(density_band) %in% c("01", "02") ~ "D1",
+      as.character(density_band) %in% c("03", "04") ~ "D2",
+      as.character(density_band) %in% c("05", "06") ~ "D3",
+      as.character(density_band) %in% c("07", "08") ~ "D4",
+      TRUE ~ NA_character_
+    ),
+
+    density_4 = factor(
+      density_4,
+      levels = c("D1", "D2", "D3", "D4")
+    )
+  )
+
+# Verify no density group is missing
+stopifnot(!anyNA(model_data$density_4))
+
+# Check grouped sample support
+support_4 <- model_data %>%
+  group_by(density_4, car_group) %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    .groups = "drop"
+  )
+
+print(support_4, n = Inf)
+```
+
+```{r optional_step_26_4_interaction_m3, eval=TRUE}
+# Fit M2_4 using grouped density and the same basic covariates as M2.
+# Add density_4:car_group interaction terms only in M3_4.
+# anova(m2_4, m3_4) is a valid nested comparison on the SAME four-group coding.
+# Do NOT directly compare M2 eight-band coefficients to the grouped M3 coefficients.
+
+# =====================================================
+# Step 26.4: Model M2_4 without interaction
+# =====================================================
+
+m2_4 <- lm(
+  mean_trip_miles ~
+    age_c +
+    I(age_c^2) +
+    worker +
+    hh_size +
+    day_of_week +
+    density_4 +
+    car_group,
+  data = model_data
+)
+
+# Model M3_4 with interaction
+m3_4 <- update(
+  m2_4,
+  . ~ . + density_4:car_group
+)
+
+# Examine the interaction model
+summary(m3_4)
+
+# Joint F-test for interaction terms
+anova(m2_4, m3_4)
+```
+
+## Step 27: Compare model fit and nested tests
+
+### Step 27.1 - Confirm all three main models use the same records
+
+```{r step_27_1_same_sample}
+# nobs() prints model sample sizes.
+# model.frame() returns the data used in each fitted model.
+# identical(rownames(...), rownames(...)) checks that M0, M1 and M2 used the same rows, not merely the same sample size.
+
+# =====================================================
+# Step 27.1: Check identical model samples
+# =====================================================
+
+nobs(m0)
+nobs(m1)
+nobs(m2)
+
+stopifnot(
+  identical(
+    rownames(model.frame(m0)),
+    rownames(model.frame(m1))
+  ),
+  identical(
+    rownames(model.frame(m1)),
+    rownames(model.frame(m2))
+  )
+)
+```
+
+### Step 27.2 - Generate the model-fit comparison table
+
+The reported indicators are sample size, R-squared, adjusted R-squared, residual standard error (miles), and AIC. Adding predictors can raise R-squared even when they contribute little substantively; interpret fit jointly with theory, diagnostics and uncertainty.
+
+```{r step_27_2_model_fit}
+# models is a named list of the three fitted lm objects.
+# purrr::imap_dfr() iterates over models AND their names and combines outputs by row.
+# summary(model)$r.squared and $adj.r.squared are goodness-of-fit measures.
+# summary(model)$sigma estimates the residual standard deviation in miles.
+# AIC() provides an auxiliary fit-versus-complexity measure.
+
+# =====================================================
+# Step 27.2: Model fit comparison
+# =====================================================
+
+models <- list(
+  M0 = m0,
+  M1 = m1,
+  M2 = m2
+)
+
+model_fit <- purrr::imap_dfr(
+  models,
+  function(model, model_name) {
+
+    result <- summary(model)
+
+    tibble(
+      Model = model_name,
+      N = nobs(model),
+      R_squared = result$r.squared,
+      Adjusted_R2 = result$adj.r.squared,
+      Residual_SE = result$sigma,
+      AIC = AIC(model)
+    )
+  }
+)
+
+print(model_fit)
+```
+
+### Step 27.3 - Record both nested-model tests
+
+```{r step_27_3_nested_tests}
+# The first comparison tests density jointly (M0 versus M1).
+# The second comparison tests car ownership jointly (M1 versus M2).
+# These tests are conventional; robust/clustered joint tests are reserved for subsequent work.
+
+# =====================================================
+# Step 27.3: Nested model tests
+# =====================================================
+
+# Does density add information?
+comparison_density <- anova(m0, m1)
+
+# Does car ownership add information?
+comparison_cars <- anova(m1, m2)
+
+print(comparison_density)
+print(comparison_cars)
+```
+
+## Step 28: Export regression results and plot adjusted associations
+
+### Step 28.1 - Build a full model coefficient table
+
+The coefficients, standard errors, t-statistics, p-values and 95% confidence intervals are preliminary **conventional OLS** quantities. Avoid rounding the underlying numbers before exporting; round only for the final academic table.
+
+```{r step_28_1_coeff_table}
+# A function accepts one model and a label, then returns a tidy row-per-term table.
+# coef(summary(model)) produces the coefficient matrix.
+# confint(model) supplies conventional 95% OLS confidence intervals.
+# bind_rows() stacks M0, M1 and M2 into one CSV-ready dataset.
+
+# =====================================================
+# Step 28.1: Extract regression coefficients
+# =====================================================
+
+extract_coefficients <- function(model, model_name) {
+
+  s <- coef(summary(model))
+  ci <- confint(model)
+
+  tibble(
+    model = model_name,
+    term = rownames(s),
+    estimate = s[, "Estimate"],
+    std_error = s[, "Std. Error"],
+    t_value = s[, "t value"],
+    p_value = s[, "Pr(>|t|)"],
+    ci_low = ci[, 1],
+    ci_high = ci[, 2]
+  )
+}
+
+regression_table <- bind_rows(
+  extract_coefficients(m0, "M0"),
+  extract_coefficients(m1, "M1"),
+  extract_coefficients(m2, "M2")
+)
+
+print(regression_table, n = Inf)
+```
+
+### Step 28.2 - Plot the M2 density coefficients
+
+Each point compares one density band with band `01` while holding other included covariates fixed. Horizontal intervals are conventional model-based 95% confidence intervals, not yet heteroskedasticity- or household-cluster-robust intervals.
+
+```{r step_28_2_density_plot}
+# filter(model == "M2") selects the expanded model estimates.
+# grepl() keeps only the seven density contrasts, excluding other controls.
+# geom_hline(yintercept = 0) marks no conditional difference.
+# geom_pointrange() displays the point estimate and its confidence interval.
+# coord_flip() lays categories out vertically for readability.
+
+# =====================================================
+# Step 28.2: Density coefficient plot
+# =====================================================
+
+density_coef_plot <- regression_table %>%
+  filter(
+    model == "M2",
+    grepl("^density_band", term)
+  )
+
+p_density_coef <- ggplot(
+  density_coef_plot,
+  aes(
+    x = term,
+    y = estimate
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_pointrange(
+    aes(
+      ymin = ci_low,
+      ymax = ci_high
+    )
+  ) +
+  coord_flip() +
+  labs(
+    title = "Adjusted Differences in Mean Trip Distance",
+    subtitle = "Reference: lowest population density group",
+    x = "Residential population density category",
+    y = "Estimated difference (miles)"
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_density_coef)
+```
+
+### Step 28.3 - Plot conditional predictions from M2
+
+These predictions describe **one fixed reference profile** at each density band: age at its sample mean, worker status as employed, household size at the sample median, one household vehicle and the most common survey weekday. They are **not** density-specific observed means or population average marginal effects.
+
+```{r step_28_3_prediction_profiles}
+# table() counts the number of records per weekday; sort(..., decreasing=TRUE) finds the most frequent one.
+# nlevels() returns the eight density levels, including their order.
+# rep() repeats a fixed covariate value for each density band.
+# The factor levels in newdata must match those used to fit M2.
+# age_c = 0 means the modelling-sample mean age.
+
+# =====================================================
+# Step 28.3: Build prediction profiles
+# =====================================================
+
+# Use the most frequent survey day
+reference_day <- names(
+  sort(
+    table(model_data$day_of_week),
+    decreasing = TRUE
+  )
+)[1]
+
+# Number of density categories
+n_density <- nlevels(model_data$density_band)
+
+# Construct a reference profile for each density
+prediction_data <- tibble(
+  density_band = factor(
+    levels(model_data$density_band),
+    levels = levels(model_data$density_band)
+  ),
+
+  # age_c = 0 means sample mean age
+  age_c = rep(0, n_density),
+
+  worker = factor(
+    rep("worker", n_density),
+    levels = levels(model_data$worker)
+  ),
+
+  hh_size = rep(
+    median(model_data$hh_size),
+    n_density
+  ),
+
+  day_of_week = factor(
+    rep(reference_day, n_density),
+    levels = levels(model_data$day_of_week)
+  ),
+
+  car_group = factor(
+    rep("1", n_density),
+    levels = levels(model_data$car_group)
+  )
+)
+
+print(prediction_data)
+```
+
+**Predict the conditional mean and its 95% confidence interval** (different from a prediction interval for an individual traveller).
+
+```{r step_28_3_predict}
+# predict(m2, newdata=..., interval="confidence") estimates each reference profile mean.
+# Its fit, lwr and upr columns are conventional OLS point estimates and 95% mean CIs.
+# bind_cols() attaches profile identifiers so the estimates can be plotted.
+
+# =====================================================
+# Predict conditional means and 95% CIs
+# =====================================================
+
+prediction_results <- predict(
+  m2,
+  newdata = prediction_data,
+  interval = "confidence",
+  level = 0.95
+)
+
+prediction_results <- bind_cols(
+  prediction_data,
+  as_tibble(prediction_results)
+)
+
+print(prediction_results)
+```
+
+**Plot the predicted mean trip distance by density band.** Because plain OLS is unrestricted, it can occasionally predict a negative distance; inspect results rather than silently truncating predictions.
+
+```{r step_28_3_predictions_plot}
+# ggplot() maps each density category to its fitted conditional mean.
+# geom_pointrange() shows the conventional confidence interval at each category.
+# The same specified covariate profile is used for every density category.
+
+# =====================================================
+# Plot adjusted predictions
+# =====================================================
+
+p_adjusted <- ggplot(
+  prediction_results,
+  aes(
+    x = density_band,
+    y = fit
+  )
+) +
+  geom_pointrange(
+    aes(
+      ymin = lwr,
+      ymax = upr
+    )
+  ) +
+  labs(
+    title = "Predicted Mean Trip Distance by Population Density",
+    subtitle = "Conditional predictions from Model M2",
+    x = "Residential population density category",
+    y = "Predicted mean trip distance (miles)",
+    caption = paste(
+      "Other model covariates held at the",
+      "specified reference profile."
+    )
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_adjusted)
+```
+
+### Step 28.4 - Save model objects, tables and figures
+
+File paths use the `processed_dir`, `tables_dir` and `figures_dir` variables created at the start, so both RStudio knitting from `R/` and VSCode sessions from the project root write into the **same project folders**. The original `analysis_data.rds` remains untouched.
+
+```{r step_28_4_export_results}
+# saveRDS() preserves R objects including factor levels, lm model formulas and attributes.
+# write_csv() exports numeric tables without changing the model estimates.
+# ggsave() exports each plot as a 300-DPI PNG suitable for report preparation.
+# file.path() ensures all exports go to the project root folders, regardless of working directory.
+
+# =====================================================
+# Step 28.4: Save regression outputs
+# =====================================================
+
+# Folders were created in the initial data-loading block.
+# Keep output files separate from the original cleaned input dataset.
+
+# Save common regression sample
+saveRDS(
+  model_data,
+  file.path(processed_dir, "model_data.rds")
+)
+
+# Save the three main models
+saveRDS(
+  list(
+    M0 = m0,
+    M1 = m1,
+    M2 = m2
+  ),
+  file.path(processed_dir, "regression_models.rds")
+)
+
+# Export regression results
+write_csv(
+  model_fit,
+  file.path(tables_dir, "10_model_fit_comparison.csv")
+)
+
+write_csv(
+  regression_table,
+  file.path(tables_dir, "11_regression_coefficients.csv")
+)
+
+write_csv(
+  density_comparison,
+  file.path(tables_dir, "12_density_coefficient_comparison.csv")
+)
+
+write_csv(
+  prediction_results,
+  file.path(tables_dir, "13_adjusted_predictions.csv")
+)
+
+# Export figures
+ggsave(
+  filename = file.path(figures_dir, "Figure_3_density_coefficients.png"),
+  plot = p_density_coef,
+  width = 8,
+  height = 5.5,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(figures_dir, "Figure_4_adjusted_predictions.png"),
+  plot = p_adjusted,
+  width = 8,
+  height = 5.5,
+  dpi = 300
+)
+```
+
+### Confirm the exported files
+
+```{r verify_exports}
+# list.files() confirms which files were saved, without assuming the values inside them.
+# If an expected file is missing, rerun the relevant export chunk and inspect warnings.
+
+# Show the saved model RDS files, CSV summary tables, and PNG figures.
+cat("\nSaved RDS files:\n")
+print(list.files(processed_dir, pattern = "(model_data|regression_models)\\.rds$"))
+
+cat("\nSaved regression CSV tables:\n")
+print(list.files(tables_dir, pattern = "^(10_|11_|12_|13_).*\\.csv$"))
+
+cat("\nSaved regression figures:\n")
+print(list.files(figures_dir, pattern = "^Figure_(3|4)_.*\\.png$"))
+```
+
+## Interpreting the results for the research paper
+
+- **M0:** Describe the associations with baseline personal and household controls.
+- **M1:** Interpret the seven density contrasts relative to the lowest-density category and the joint M0–M1 F-test.
+- **M2:** Examine how density coefficients change after adding vehicle ownership, without assigning a causal interpretation.
+- **Model comparison:** Report sample sizes, adjusted R-squared and nested-model tests alongside substantive interpretation.
+- **Figures:** Distinguish conditional coefficients and specified-profile predictions from raw group means.
+
+**Next stages:** Test residual patterns, outliers, functional form and multicollinearity; then evaluate heteroskedasticity-robust inference, household clustering, sample weights and alternative outcome specifications. The output from this notebook is preliminary until those checks are complete.
+

@@ -1,0 +1,1547 @@
+---
+title: "01_data_audit"
+output: html_document
+date: "2026-10-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# URBAN5127｜第四阶段：假设检验与多元线性回归
+
+详细实操教程 · 步骤 23–28 · 基于 2022 NHTS 和 31 号研究方案
+
+既然你已经完成了第三阶段，我们现在正式进入整篇课程论文最重要的部分：Regression Analysis（回归分析）。
+
+这一阶段不再重复数据清洗或描述性统计，而是利用你已经创建的 `analysis_data.rds`，回答：
+
+> 在控制年龄、就业状态、家庭规模以及调查星期之后，美国不同人口密度地区的成年出行者，其平均每次行程距离是否仍然存在差异？
+
+还将进一步研究：加入家庭汽车拥有量后，人口密度与出行距离的估计关系会发生什么变化？
+
+## 一、本阶段的目标与研究设计
+
+保持 31 号文件的研究口径
+
+初步样本
+
+# 9,052 人
+
+来自 6,113 个家庭
+
+分析层级
+
+## Person-level
+
+每人一条观测
+
+Y： `mean_trip_miles`，每名成年出行者在调查日的平均每次行程距离（英里）。
+
+核心 X： `density_band`，来自 `HTPPOPDN` 的八档 Census Tract 人口密度。
+
+控制变量： 年龄、年龄平方、工作状态、家庭规模、调查星期。
+
+扩展变量： `car_group`，家庭拥有 0、1、2 辆及以上车辆。
+
+与 31 号文件保持一致，我建议先用原始英里距离作为主要回归因变量，之后在第六阶段使用 `log1p(mean_trip_miles)` 做函数形式敏感性分析。
+
+这是为了让核心回归系数能够直接解释为“相差多少英里”，同时保留检验右偏和极端值影响的空间。是否最终保留这一设定，要结合第五阶段诊断结果判断。
+
+31_美国居住地人口密度与日常出行距离_NHTS数据详解.md
+
+
+
+### 第四阶段六个步骤
+
+| 步骤 | 核心操作                                   | 本步骤产出             |
+| ---- | ------------------------------------------ | ---------------------- |
+| 23   | 确定统计假设、准备统一建模样本、建立 M0    | 基础控制模型           |
+| 24   | 在 M0 中加入人口密度，建立 M1              | 人口密度的调整后系数   |
+| 25   | 在 M1 中加入家庭车辆数，建立 M2            | 车辆控制前后的结果比较 |
+| 26   | 判断是否适合建立人口密度 × 汽车拥有量的 M3 | 可选交互模型           |
+| 27   | 比较模型的拟合表现和整体显著性             | 模型比较表             |
+| 28   | 解释系数、置信区间，并绘制调整后关系图     | 回归结果表和 Figure 3  |
+
+### 四个模型的关系
+
+M0：基础控制模型
+
+年龄 + 年龄² + 工作状态 + 家庭规模 + 星期
+
+M1：人口密度模型
+
+M0 + 八档人口密度
+
+M2：家庭汽车拥有量模型
+
+M1 + 家庭车辆组
+
+M3：可选交互模型
+
+合理合并密度组后 + 人口密度 × 车辆拥有量
+
+M0、M1、M2 是本阶段必须完成的模型；M3 不是必须完成的。
+
+M3 需要额外检查分组样本量。你之前选定的 31 号方案指出，最低密度组中无车家庭对应的个人观测很少，直接使用八档密度和三档车辆数做完整交互，可能导致不稳定的估计。
+
+## 二、开始之前：准备第四阶段的 R 文件
+
+本阶段不需要重新运行第二阶段的数据清洗脚本，也不需要重新创建第三阶段的图表。
+
+建议新建：
+
+```
+R/04_regression.R
+```
+
+如果你使用 R Markdown，也可以建立 `04_regression.Rmd`。下面的代码按执行顺序排列；使用 R Markdown 时，分别放入 R 代码块即可。
+
+### 1. 加载数据和必要的包
+
+```{r}
+# =====================================================
+# URBAN5127 - Stage 4
+# Multiple Linear Regression
+# =====================================================
+
+library(tidyverse)
+
+# Read the cleaned person-level data
+analysis_data <- readRDS(
+  "data/processed/analysis_data.rds"
+)
+
+# Check sample size
+nrow(analysis_data)
+
+# Check household count
+n_distinct(analysis_data$HOUSEID)
+
+# Check variable names and types
+glimpse(analysis_data)
+```
+
+这里依然使用第二阶段生成的数据，预期是 9,052 名成年出行者、6,113 个家庭。
+
+如果你的第三阶段曾经为了绘图使用 `filter()` 排除某些极端距离，第四阶段不能直接沿用那个临时筛选后的对象，而应该重新从原始的 `analysis_data.rds` 开始。
+
+# 三、步骤 23：统计假设、统一建模样本与 M0
+
+## 23.1 先明确要检验什么
+
+### 假设 H1：人口密度与平均行程距离存在关联
+
+我们希望知道，在控制其他变量之后，八个人口密度组之间是否仍然存在平均行程距离差异。
+
+可以写为：
+
+\[ H_0:\beta_{D2}=\beta_{D3}=\cdots=\beta_{D8}=0 \]
+
+\[ H_1:\text{至少一个密度组系数不为 0} \]
+
+这里的第 1 组作为参考类别，不需要单独估计一个虚拟变量系数。
+
+这是一项联合假设，不能只看某一个密度组的 P 值来回答。
+
+### 假设 H2：加入家庭车辆数后，密度关联可能变化
+
+我们希望比较 M1 和 M2 中人口密度系数的方向与幅度。
+
+但需要注意：观察到系数变化，不等于证明车辆拥有量是因果中介变量。
+
+车辆拥有量可能与居住地选择、家庭资源和出行行为同时相关。因此，M1 与 M2 是两种不同的条件关联模型。
+
+### 假设 H3：密度关联可能因汽车拥有量不同而有所区别
+
+这个假设对应可选交互模型 M3，只有在分组样本足够支持时才检验。
+
+## 23.2 为什么要先建立统一的回归样本？
+
+这一点非常重要。
+
+假设 M0 使用 9,052 人，M1 由于缺失人口密度只使用 8,700 人，M2 因缺失车辆数又只使用 8,300 人。
+
+此时不同模型的系数和 \(R^2\) 变化，可能同时来自两个原因：增加了解释变量，以及使用了不同的人。
+
+为了进行可靠的嵌套模型比较，建议M0、M1、M2 全部使用同一批观测。
+
+### 执行代码
+
+```{r}
+# =====================================================
+# Step 23.2: Build a common regression sample
+# =====================================================
+
+required_vars <- c(
+  "HOUSEID",
+  "PERSONID",
+  "mean_trip_miles",
+  "age",
+  "worker",
+  "hh_size",
+  "day_of_week",
+  "density_band",
+  "car_group"
+)
+
+stopifnot(
+  all(required_vars %in% names(analysis_data))
+)
+
+model_data <- analysis_data %>%
+  select(all_of(required_vars)) %>%
+  mutate(
+    density_band = factor(
+      as.character(density_band),
+      levels = sprintf("%02d", 1:8)
+    ),
+    worker = factor(worker),
+    day_of_week = factor(day_of_week),
+    car_group = factor(
+      as.character(car_group),
+      levels = c("0", "1", "2+")
+    )
+  ) %>%
+  filter(
+    is.finite(mean_trip_miles),
+    mean_trip_miles >= 0,
+    is.finite(age),
+    age >= 18,
+    is.finite(hh_size),
+    hh_size > 0
+  ) %>%
+  drop_na() %>%
+  mutate(
+    # Center age around the sample mean
+    age_c = age - mean(age)
+  )
+
+# Compare the original and model samples
+nrow(analysis_data)
+nrow(model_data)
+
+# Verify each person appears once
+stopifnot(
+  nrow(model_data) ==
+    n_distinct(
+      model_data$HOUSEID,
+      model_data$PERSONID
+    )
+)
+
+# Check sample counts
+model_data %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    mean_age = mean(age),
+    mean_distance = mean(mean_trip_miles)
+  )
+```
+
+### 逐项解释
+
+`select(all_of(required_vars))`：只保留建模需要的字段。这样可以减少数据对象中无关字段造成的混乱。
+
+`drop_na()`：排除指定建模变量中有缺失的完整记录。
+
+这里有一个前提：原始调查中的 `-9`、`-7` 等特殊无效编码必须已在第二阶段得到正确处理。`drop_na()` 不会自动识别这些调查编码。
+
+`age_c = age - mean(age)`：将年龄中心化。
+
+例如样本平均年龄假设为 45 岁：
+
+| 原始年龄 | 中心化年龄 |
+| -------- | ---------- |
+| 25       | -20        |
+| 45       | 0          |
+| 65       | 20         |
+
+这里的 45 岁仅为说明中心化计算的示例，不是你的实际样本平均年龄。
+
+中心化以后，年龄平方项仍能捕捉非线性，但通常会降低年龄和其平方项之间由数值尺度引起的高度相关。
+
+同时，模型中年龄的一次项系数对应样本平均年龄附近的局部斜率，解释会更清楚。
+
+### 必须检查的结果
+
+如果第二阶段变量有效性处理一致，`model_data` 理论上仍应接近或等于 9,052 人。
+
+如果减少了样本，不要直接认为是错误，也不要填补数据凑齐人数。检查被排除的变量和记录，记录样本变化原因。
+
+## 23.3 明确分类变量的参考组
+
+分类变量进入线性回归后，R 默认通过虚拟变量进行编码，并省略一个参考类别。
+
+建议使用如下参考组：
+
+| 自变量     | 参考类别               | 为什么                       |
+| ---------- | ---------------------- | ---------------------------- |
+| 人口密度   | `01`，0–99 人/平方英里 | 比较其他密度组与最低密度组   |
+| 工作状态   | `not_worker`           | 比较工作者与非工作者         |
+| 家庭车辆数 | `1`，拥有一辆车        | 比较无车和多车家庭与一车家庭 |
+| 调查星期   | 数据因子的第一个类别   | 解释其他星期相对该星期的差异 |
+
+### 执行代码
+
+```{r}
+# =====================================================
+# Step 23.3: Set factor reference categories
+# =====================================================
+
+# First inspect the levels
+levels(model_data$density_band)
+levels(model_data$worker)
+levels(model_data$car_group)
+levels(model_data$day_of_week)
+
+# Verify the intended references exist
+stopifnot(
+  "01" %in% levels(model_data$density_band),
+  "not_worker" %in% levels(model_data$worker),
+  "1" %in% levels(model_data$car_group)
+)
+
+# Set reference categories
+model_data <- model_data %>%
+  mutate(
+    density_band = relevel(
+      density_band,
+      ref = "01"
+    ),
+
+    worker = relevel(
+      worker,
+      ref = "not_worker"
+    ),
+
+    car_group = relevel(
+      car_group,
+      ref = "1"
+    )
+  )
+```
+
+这里把汽车拥有量的参考类别设置成了 `"1"`，是为了便于解释，也避免让稀少的无车家庭始终成为对比基准。
+
+这不改变模型所包含的信息，也不会改变同一模型的拟合值或 \(R^2\)，只是改变系数的表示方式。
+
+## 23.4 可选：先进行单因素 ANOVA
+
+这是对 Lecture 7 的直接应用。
+
+由于人口密度有八个类别，我们可以先检验八组的未经调整平均行程距离是否全部相等。
+
+```{r}
+# =====================================================
+# Optional: One-way ANOVA
+# =====================================================
+
+density_anova <- aov(
+  mean_trip_miles ~ density_band,
+  data = model_data
+)
+
+summary(density_anova)
+```
+
+假设为：
+
+\[ H_0:\mu_1=\mu_2=\cdots=\mu_8 \]
+
+如果 P 值较小，说明在该检验假设下，有证据认为至少两个组的均值不同。
+
+但它不会告诉我们是哪两组存在差异，也不能说明这种差异在控制其他变量后是否仍然存在。
+
+此外，你的数据明显右偏，存在极端值和家庭内相关。因此，这个传统 ANOVA 只能作为初步、未经调整的检验。不能把它当作最终稳健推断。
+
+还可以练习 Lecture 6 的两组均值检验：
+
+```{r}
+t.test(
+  mean_trip_miles ~ worker,
+  data = model_data
+)
+```
+
+这是工作者与非工作者的 Welch t 检验，同样属于未经调整的比较。主研究仍然应该以多元回归为核心。
+
+## 23.5 正式建立 M0：基础控制模型
+
+M0 不包含人口密度，也不包含汽车拥有量。
+
+它的作用是建立一个基础模型，说明年龄、工作状态、家庭规模和调查星期与出行距离的关联。
+
+### 模型公式
+
+\[ Y_i= \beta_0+ \beta_1 AgeC_i+ \beta_2 AgeC_i^2+ \beta_3 Worker_i+ \beta_4 HHSize_i+ \boldsymbol{\gamma}^{\top}Day_i+ \varepsilon_i \]
+
+其中 \(Day_i\) 代表调查星期的分类变量，而不是把星期编码作为连续数字。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 23.5: Model M0 - Baseline controls
+# =====================================================
+
+m0 <- lm(
+  mean_trip_miles ~
+    age_c +
+    I(age_c^2) +
+    worker +
+    hh_size +
+    day_of_week,
+  data = model_data
+)
+
+# Regression output
+summary(m0)
+
+# Conventional confidence intervals
+confint(m0)
+
+# Number of observations actually used
+nobs(m0)
+```
+
+### 关键函数解释
+
+`lm()`：建立普通最小二乘线性回归。
+
+`~`：表示“因变量由右侧自变量解释”。
+
+`+`：在回归公式中添加变量。
+
+`I(age_c^2)`：让 R 将中心化年龄的平方作为数值变量纳入模型，而不是按照回归公式中的特殊运算符解释。
+
+`summary(m0)`：输出系数、标准误、t 值、P 值、残差概要、\(R^2\) 等。
+
+`confint(m0)`：计算回归系数的传统置信区间。
+
+`nobs(m0)`：查询实际进入模型的观测数。
+
+### M0 完成之后需要回答什么？
+
+先观察年龄与年龄平方项是否共同表现出非线性关系，工作状态系数的方向是什么，以及家庭规模与行程距离的关联幅度。
+
+但不要根据 M0 就得出有关人口密度的结论，因为它根本还没有包含人口密度。
+
+# 四、步骤 24：建立 M1，加入人口密度
+
+对应 Lecture 7–8：分类变量回归与多元线性回归
+
+这是第四阶段第一次真正检验你的核心研究问题。
+
+## 24.1 为什么建立 M1？
+
+第三阶段已经通过箱线图、均值和中位数比较展示了不同人口密度组的出行距离。
+
+但是这些描述性差异可能受到年龄、工作状态、家庭规模等因素影响。
+
+例如，低密度地区与高密度地区的居民年龄结构可能不同，二者的出行距离也可能受到工作状态影响。
+
+M1 的目标是：
+
+在统计上保持基础控制变量不变，估计不同人口密度组与平均行程距离之间的条件关联。
+
+## 24.2 M1 模型结构
+
+\[ M1=M0+\text{Density categories} \]
+
+因为 `density_band` 有八个等级，R 默认选择一个参考等级，并为其余七个等级估计系数。
+
+因此，不是只增加一个连续型密度系数，而是增加七个分类变量系数。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 24: Model M1 - Add population density
+# =====================================================
+
+m1 <- update(
+  m0,
+  . ~ . + density_band
+)
+
+# Show regression results
+summary(m1)
+
+# Coefficient confidence intervals
+confint(m1)
+
+# Check sample size
+nobs(m1)
+```
+
+`update()` 可以在已有回归模型的基础上修改公式。
+
+其中：
+
+```{r}
+. ~ . + density_band
+```
+
+左侧的 `.` 表示继续使用原来的因变量，右侧的 `.` 表示保留原有解释变量，再增加 `density_band`。
+
+因此，M1 与 M0 只有一个主要区别：增加了人口密度这个分类解释变量。
+
+## 24.3 如何理解 M1 的输出？
+
+执行：
+
+```{r}
+summary(m1)
+```
+
+你会看到大致这样的结果结构：
+
+```
+Coefficients:
+                    Estimate Std. Error t value Pr(>|t|)
+(Intercept)             ...
+age_c                   ...
+I(age_c^2)              ...
+workerworker            ...
+hh_size                 ...
+day_of_week...          ...
+density_band02          ...
+density_band03          ...
+density_band04          ...
+density_band05          ...
+density_band06          ...
+density_band07          ...
+density_band08          ...
+
+Residual standard error: ...
+Multiple R-squared: ...
+Adjusted R-squared: ...
+F-statistic: ...
+```
+
+这是输出结构示例，省略号不代表实际的 NHTS 回归结果。
+
+重点解释如下。
+
+### 1. `density_band02` 是什么意思？
+
+由于设置了：
+
+```
+density_band = relevel(
+  density_band,
+  ref = "01"
+)
+```
+
+所以 `density_band01` 不会单独出现，它是参考类别。
+
+`density_band02` 的系数表示：
+
+> 在模型包含的年龄、工作状态、家庭规模和调查星期等变量相同的条件下，人口密度为 100–499 人/平方英里的成年出行者，相对于人口密度为 0–99 人/平方英里的受访者，平均每次行程距离的估计差异。
+
+假设输出为：
+
+```
+density_band02   -1.50
+```
+
+那么表示：
+
+在其他建模变量相同的条件下，第二密度组的预测平均行程距离比第一组低 1.50 英里。
+
+如果输出为：
+
+```
+density_band02    2.30
+```
+
+则表示第二组的预测均值比第一组高 2.30 英里。
+
+这两个数字都只是解释系数含义的例子，并不是你的实际估计结果。
+
+### 2. 为什么不能把密度组看成等间距连续变量？
+
+因为八个区间宽度并不相同。
+
+从第一组到第二组，与从第七组到第八组，代表的人口密度差异完全不同。
+
+所以不能把 `HTPPOPDN` 的 `"01"`–`"08"` 直接转换为 1–8 后，再把系数解释为人口密度“每增加一个单位”的影响。
+
+使用因子变量能够避免强行假设线性、等间距关系。
+
+### 3. P 值与置信区间怎么理解？
+
+假设某个类别的结果是：
+
+| 指标       | 假设值         |
+| ---------- | -------------- |
+| Estimate   | -2.40          |
+| Std. Error | 0.80           |
+| P value    | 0.003          |
+| 95% CI     | [-3.97, -0.83] |
+
+这表示在当前回归的统计假设下，该类别相对于参考组的条件平均差异估计为 -2.40 英里，95% 置信区间不包含 0。
+
+但这不能直接证明更高人口密度造成了更短的行程。
+
+你的数据属于横截面观察性调查，仍可能存在居住自选择、遗漏变量和其他混杂因素。
+
+## 24.4 检验人口密度的整体显著性
+
+这是比逐个看七个 P 值更重要的操作。
+
+我们需要判断：把人口密度整体加入模型，是否提供了额外的统计解释？
+
+执行：
+
+```{r}
+# =====================================================
+# Compare M0 and M1
+# =====================================================
+
+anova(m0, m1)
+```
+
+这是对两个嵌套模型的部分 F 检验。
+
+零假设：
+
+\[ H_0:\beta_{D2}=\beta_{D3}=\cdots=\beta_{D8}=0 \]
+
+如果检验的 P 值较小，说明在该检验假设下，有证据认为七个密度系数不全为 0。
+
+如果 P 值不小，则不能拒绝它们同时为 0 的假设。
+
+要特别注意： 这是常规 OLS F 检验，依赖有关误差结构的假设。鉴于 NHTS 存在家庭内部相关和可能的异方差，最终论文还应结合后续稳健推断，不应只凭这个 P 值下结论。
+
+### 24.5 M1 完成后的验收
+
+| 检查内容         | 预期                       |
+| ---------------- | -------------------------- |
+| `nobs(m1)`       | 与 M0 一致                 |
+| 人口密度参考组   | `01`                       |
+| 人口密度系数数量 | 7 个                       |
+| `anova(m0, m1)`  | 能正常运行                 |
+| 置信区间         | 已成功计算                 |
+| 研究解释         | 能说明方向、幅度和不确定性 |
+
+# 五、步骤 25：建立 M2，加入家庭车辆拥有量
+
+对应 Lecture 8：多元回归与逐步加入控制变量
+
+这一部分很有研究价值，因为汽车拥有量与居住环境和日常出行行为之间存在紧密联系。
+
+我们需要研究：
+
+在已有年龄、工作状态、家庭规模、调查星期和人口密度的基础上，加入车辆拥有量后，人口密度系数是否发生明显变化？
+
+## 25.1 为什么要加入家庭车辆数？
+
+假设某些人口密度较低的家庭通常拥有更多汽车，而人口密度较高的家庭拥有汽车较少。
+
+汽车可用性可能与居民出行距离相关。
+
+那么，在没有控制家庭汽车拥有量时，人口密度系数可能同时反映了居住环境与车辆拥有结构的差异。
+
+但是，请注意两个潜在机制：
+
+| 可能机制 | 解释                                                         |
+| -------- | ------------------------------------------------------------ |
+| 混杂     | 家庭资源或居住偏好等共同因素影响车辆拥有、居住地选择和出行距离 |
+| 中介     | 居住环境可能与汽车拥有量相关，而车辆拥有量进一步与出行行为相关 |
+
+这两种机制都可能存在。
+
+因此，M2 的定位是加入汽车拥有量的扩展条件关联模型，而不是简单地说 M2 一定比 M1 更接近人口密度的因果作用。
+
+## 25.2 建立 M2
+
+\[ M2=M1+\text{Car ownership} \]
+
+R 代码：
+
+```{r}
+# =====================================================
+# Step 25: Model M2 - Add household vehicles
+# =====================================================
+
+m2 <- update(
+  m1,
+  . ~ . + car_group
+)
+
+# Regression results
+summary(m2)
+
+# Conventional confidence intervals
+confint(m2)
+
+# Check sample size
+nobs(m2)
+```
+
+因为我们将 `car_group` 的参考类别改成了拥有一辆车的家庭，因此新增系数通常为：
+
+```
+car_group0
+car_group2+
+```
+
+它们分别表示：
+
+`car_group0`：无车家庭相对于一车家庭的条件平均出行距离差异。
+
+`car_group2+`：拥有至少两辆车的家庭相对于一车家庭的条件平均出行距离差异。
+
+## 25.3 检验车辆拥有量是否增加模型解释力
+
+```{r}
+# =====================================================
+# Compare M1 and M2
+# =====================================================
+
+anova(m1, m2)
+```
+
+这一次检验的是：
+
+\[ H_0:\beta_{Car0}=\beta_{Car2+}=0 \]
+
+也就是说，在已有变量基础上，汽车拥有量的两个类别系数是否同时为 0。
+
+需要注意，这个检验回答的是汽车拥有量变量的增量解释问题，并不直接检验人口密度系数是否因车辆数的加入而发生了统计上显著的变化。
+
+## 25.4 比较 M1 和 M2 的人口密度系数
+
+我建议单独生成一张表，比较所有人口密度系数在加入汽车拥有量之前和之后的变化。
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 25.4: Compare density coefficients
+# =====================================================
+
+# Extract density coefficients
+density_m1 <- coef(m1)[
+  grepl("^density_band", names(coef(m1)))
+]
+
+density_m2 <- coef(m2)[
+  grepl("^density_band", names(coef(m2)))
+]
+
+# Confirm both models have the same density terms
+stopifnot(
+  identical(
+    names(density_m1),
+    names(density_m2)
+  )
+)
+
+# Build comparison table
+density_comparison <- tibble(
+  density_term = names(density_m1),
+
+  M1_estimate = unname(density_m1),
+
+  M2_estimate = unname(density_m2),
+
+  change = M2_estimate - M1_estimate
+)
+
+print(density_comparison)
+```
+
+### 结果应该怎么分析？
+
+假设有某组密度系数如下：
+
+| 模型 | 假设系数 |
+| ---- | -------- |
+| M1   | -3.50    |
+| M2   | -2.10    |
+| 变化 | +1.40    |
+
+这里并不是说距离真的增加了 1.40 英里。
+
+它意味着加入汽车拥有量之后，该密度类别与参考组的估计条件平均差异由 -3.50 英里变化为 -2.10 英里。
+
+负向关联减弱了，但它仍然是负的。
+
+需要进一步讨论：车辆拥有量与人口密度、出行距离之间是否可能存在相关关系，以及这种系数变化是否符合交通行为研究中的理论预期。
+
+如果系数几乎不变化，也可能是有意义的结果。它可能说明在当前设定中车辆拥有量的加入没有明显改变该密度类别的条件关联，但不能据此证明没有混杂。
+
+步骤 25 完成后，应当同时保留 M1 和 M2。 不要因为 M2 加入了更多变量，就直接删除 M1。递进模型之间的对比本身就是论文的重要分析结果。
+
+# 六、步骤 26：可选交互模型 M3
+
+对应 Lecture 8：扩展回归模型与变量间的异质性
+
+这一步比前三个模型复杂，但它能回答一个新的研究问题：
+
+人口密度与平均行程距离的关系，是否随家庭汽车拥有量不同而改变？
+
+这叫做交互效应（Interaction Effect）。
+
+## 26.1 什么是交互效应？
+
+在 M2 中，我们默认不同汽车拥有量的家庭具有相同的人口密度系数。
+
+也就是说，在控制其他变量后，密度组的条件平均差异不会因家庭车辆数而改变。
+
+M3 则允许这种关系发生变化。
+
+交互效应示意（假设关系，不是 NHTS 实测结果）
+
+无车家庭
+
+一车家庭
+
+多车家庭
+
+三条线斜率不同，用于说明交互作用的概念。实际是否存在这种关系，需要回归后检验。
+
+## 26.2 为什么不直接使用八组 × 三组交互？
+
+如果直接执行：
+
+```{r}
+lm(
+  mean_trip_miles ~ density_band * car_group,
+  data = model_data
+)
+```
+
+就会把人口密度、车辆拥有量及两者的所有交互项全部加入模型。
+
+但是 31 号文件已经确认：
+
+| 交叉类别             | 候选人数 |
+| -------------------- | -------- |
+| 密度组 01 × 无车家庭 | 6        |
+| 密度组 03 × 无车家庭 | 10       |
+
+样本很少的单元格可能使特定交互系数非常不稳定。
+
+31_美国居住地人口密度与日常出行距离_NHTS数据详解.md
+
+
+
+因此，先检查交叉样本，再决定是否建立 M3。
+
+### 检查每个交叉组的人数与家庭数
+
+```{r}
+# =====================================================
+# Step 26.2: Check cell support
+# =====================================================
+
+interaction_support <- model_data %>%
+  group_by(density_band, car_group) %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    .groups = "drop"
+  )
+
+print(interaction_support, n = Inf)
+```
+
+由于同一家庭可能有多名受访者，所以还需要观察每个交叉组包含多少个不同家庭。
+
+## 26.3 可选方案：将人口密度合并为四组
+
+31 号文件建议了一种有明确区间含义的分组方法：
+
+| 新组 | 原始类别 | 密度区间（人/平方英里） |
+| ---- | -------- | ----------------------- |
+| D1   | 01、02   | 低于 500                |
+| D2   | 03、04   | 500–1,999               |
+| D3   | 05、06   | 2,000–9,999             |
+| D4   | 07、08   | 10,000 及以上           |
+
+这里的合并是为了探索交互模型是否有足够数据支持，不应该取代主要的八档人口密度分析。
+
+```{r}
+# =====================================================
+# Step 26.3: Create four density groups
+# =====================================================
+
+model_data <- model_data %>%
+  mutate(
+    density_4 = case_when(
+      as.character(density_band) %in% c("01", "02") ~ "D1",
+      as.character(density_band) %in% c("03", "04") ~ "D2",
+      as.character(density_band) %in% c("05", "06") ~ "D3",
+      as.character(density_band) %in% c("07", "08") ~ "D4",
+      TRUE ~ NA_character_
+    ),
+
+    density_4 = factor(
+      density_4,
+      levels = c("D1", "D2", "D3", "D4")
+    )
+  )
+
+# Verify no density group is missing
+stopifnot(!anyNA(model_data$density_4))
+
+# Check grouped sample support
+support_4 <- model_data %>%
+  group_by(density_4, car_group) %>%
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    .groups = "drop"
+  )
+
+print(support_4, n = Inf)
+```
+
+判断原则： 如果合并后仍然有非常稀少的交叉类别，可以放弃交互模型。不存在一个能保证模型可靠的万能最小人数阈值，还要结合不同家庭数量、方差和模型系数稳定性判断。
+
+## 26.4 建立可比较的交互模型
+
+这里特别强调一件事：
+
+不能直接把八档密度的 M2 和四档密度的 M3 当作只相差一个交互项的模型比较。
+
+应该先建立同样使用四档密度的无交互模型 `m2_4`，再添加交互项。
+
+```{r}
+# =====================================================
+# Step 26.4: Model M2_4 without interaction
+# =====================================================
+
+m2_4 <- lm(
+  mean_trip_miles ~
+    age_c +
+    I(age_c^2) +
+    worker +
+    hh_size +
+    day_of_week +
+    density_4 +
+    car_group,
+  data = model_data
+)
+
+# Model M3_4 with interaction
+m3_4 <- update(
+  m2_4,
+  . ~ . + density_4:car_group
+)
+
+# Examine the interaction model
+summary(m3_4)
+
+# Joint F-test for interaction terms
+anova(m2_4, m3_4)
+```
+
+这里 `density_4:car_group` 只增加交互项；两个变量的主效应已经包含在 `m2_4` 中。
+
+也可以使用：
+
+```
+density_4 * car_group
+```
+
+它在 R 回归公式中表示：
+
+```
+density_4 + car_group + density_4:car_group
+```
+
+即两个主效应加上交互效应。
+
+### 如何解释 M3？
+
+主要关注 `anova(m2_4, m3_4)` 的联合检验。
+
+如果拒绝交互项同时为 0 的零假设，说明在当前统计设定下，有证据认为人口密度的条件关联随车辆拥有量类别变化。
+
+但它仍然不意味着车辆拥有量造成了人口密度作用的变化。
+
+本步骤的建议：如果交互项统计支持薄弱、估计不稳定，或者难以在论文中解释，可以只报告 M0–M2。 没有必要为了让模型更复杂而强行保留 M3。
+
+# 七、步骤 27：模型比较与模型质量评价
+
+对应 Lecture 7–8：\(R^2\)、Adjusted \(R^2\)、嵌套模型检验
+
+这一阶段的重点不是选择“P 值最小的模型”，而是评价不同模型增加了多少解释信息，以及增加的变量是否具有研究意义。
+
+## 27.1 必须先确认三个模型使用同一批观测
+
+```{r}
+# =====================================================
+# Step 27.1: Check identical model samples
+# =====================================================
+
+nobs(m0)
+nobs(m1)
+nobs(m2)
+
+stopifnot(
+  identical(
+    rownames(model.frame(m0)),
+    rownames(model.frame(m1))
+  ),
+  identical(
+    rownames(model.frame(m1)),
+    rownames(model.frame(m2))
+  )
+)
+```
+
+如果检查通过，说明 M0、M1 和 M2 使用了相同的分析记录。
+
+## 27.2 自动生成模型比较表
+
+```{r}
+# =====================================================
+# Step 27.2: Model fit comparison
+# =====================================================
+
+models <- list(
+  M0 = m0,
+  M1 = m1,
+  M2 = m2
+)
+
+model_fit <- purrr::imap_dfr(
+  models,
+  function(model, model_name) {
+
+    result <- summary(model)
+
+    tibble(
+      Model = model_name,
+      N = nobs(model),
+      R_squared = result$r.squared,
+      Adjusted_R2 = result$adj.r.squared,
+      Residual_SE = result$sigma,
+      AIC = AIC(model)
+    )
+  }
+)
+
+print(model_fit)
+```
+
+### 每个指标是什么含义？
+
+| 指标             | 英文                         | 如何理解                             |
+| ---------------- | ---------------------------- | ------------------------------------ |
+| N                | Number of observations       | 实际进入回归的样本量                 |
+| \(R^2\)          | R-squared                    | 回归模型解释的样本因变量变异比例     |
+| Adjusted \(R^2\) | Adjusted R-squared           | 对解释变量数量进行调整后的 \(R^2\)   |
+| Residual SE      | Residual Standard Error      | 模型残差的典型尺度，在这里单位为英里 |
+| AIC              | Akaike Information Criterion | 基于似然与复杂度权衡的模型选择指标   |
+
+如果 M0、M1、M2 是相同因变量、相同样本上的嵌套 OLS 模型，加入额外变量以后，普通 \(R^2\) 一般不会下降。
+
+所以：
+
+M2 的 \(R^2\) 高于 M1，不足以证明 M2 一定是更好的科学解释模型。
+
+需要结合 Adjusted \(R^2\)、F 检验、估计系数的变化、理论依据和后续模型诊断。
+
+另外，AIC 属于辅助指标。本课程的重点是解释性统计推断，而不是完全以预测拟合表现选模型。
+
+## 27.3 汇总两个核心模型比较检验
+
+```{r}
+# =====================================================
+# Step 27.3: Nested model tests
+# =====================================================
+
+# Does density add information?
+comparison_density <- anova(m0, m1)
+
+# Does car ownership add information?
+comparison_cars <- anova(m1, m2)
+
+print(comparison_density)
+print(comparison_cars)
+```
+
+| 模型比较     | 检验目标                       | 能回答的问题                     |
+| ------------ | ------------------------------ | -------------------------------- |
+| M0 vs M1     | 人口密度七个类别系数同时为 0   | 密度分组是否提供额外统计解释？   |
+| M1 vs M2     | 汽车拥有量两个类别系数同时为 0 | 车辆拥有量是否提供额外统计解释？ |
+| M2_4 vs M3_4 | 交互项联合为 0                 | 密度关系是否因车辆数而不同？     |
+
+注意，这些传统 F 检验依赖相应的 OLS 误差假设。后续应考虑异方差和家庭聚类对联合检验结论的影响。
+
+## 27.4 哪一个模型适合做论文中的主要模型？
+
+我建议先采用以下解释安排：
+
+M0： 作为人口与家庭结构的基线模型。
+
+M1： 作为重点研究人口密度关联的主要模型。
+
+M2： 作为加入家庭汽车拥有量的扩展模型。
+
+M3： 作为可选的异质性检验，而不是默认的最终模型。
+
+这样安排能够清楚展示分析的逻辑，而不是只呈现一个包含大量变量的复杂模型。
+
+# 八、步骤 28：整理回归结果、解释系数并绘图
+
+最终成果：Regression Table + Adjusted Prediction Figure
+
+这一步是将 R 的回归输出转化为可以用于正式论文的研究结果。
+
+## 28.1 生成三个模型的回归系数表
+
+为了后面绘图和导出方便，可以使用一个函数提取系数、标准误、t 值、P 值及 95% 置信区间。
+
+```{r}
+# =====================================================
+# Step 28.1: Extract regression coefficients
+# =====================================================
+
+extract_coefficients <- function(model, model_name) {
+
+  s <- coef(summary(model))
+  ci <- confint(model)
+
+  tibble(
+    model = model_name,
+    term = rownames(s),
+    estimate = s[, "Estimate"],
+    std_error = s[, "Std. Error"],
+    t_value = s[, "t value"],
+    p_value = s[, "Pr(>|t|)"],
+    ci_low = ci[, 1],
+    ci_high = ci[, 2]
+  )
+}
+
+regression_table <- bind_rows(
+  extract_coefficients(m0, "M0"),
+  extract_coefficients(m1, "M1"),
+  extract_coefficients(m2, "M2")
+)
+
+print(regression_table, n = Inf)
+```
+
+这里 `coef(summary(model))` 可以提取回归系数矩阵，`confint()` 给出传统 OLS 系数置信区间。
+
+正式论文一般不需要展示所有中间控制变量的完整小数精度。可以根据论文格式将估计值保留两位或三位小数，但不要在计算阶段提前舍入。
+
+### 论文中的回归表大致结构
+
+| Variable       | M0     | M1     | M2     |
+| -------------- | ------ | ------ | ------ |
+| Age            | β (SE) | β (SE) | β (SE) |
+| Age²           | β (SE) | β (SE) | β (SE) |
+| Worker         | β (SE) | β (SE) | β (SE) |
+| Household size | β (SE) | β (SE) | β (SE) |
+| Density 02     | —      | β (SE) | β (SE) |
+| Density 03     | —      | β (SE) | β (SE) |
+| …              | —      | …      | …      |
+| Density 08     | —      | β (SE) | β (SE) |
+| Cars: 0        | —      | —      | β (SE) |
+| Cars: 2+       | —      | —      | β (SE) |
+| Day controls   | Yes    | Yes    | Yes    |
+| N              | 待运行 | 待运行 | 待运行 |
+| Adjusted R²    | 待运行 | 待运行 | 待运行 |
+
+这里只展示排版结构，不包含已经估计的系数。最后论文可报告系数及括号内标准误，并清楚注明参考类别。
+
+## 28.2 图一：人口密度回归系数与置信区间
+
+这类图比单纯复制 R Console 输出更适合呈现在论文中。
+
+它可以展示：
+
+在控制其他变量之后，每个人口密度等级相对于最低密度组，估计平均行程距离相差多少英里？
+
+### R 代码
+
+```{r}
+# =====================================================
+# Step 28.2: Density coefficient plot
+# =====================================================
+
+density_coef_plot <- regression_table %>%
+  filter(
+    model == "M2",
+    grepl("^density_band", term)
+  )
+
+p_density_coef <- ggplot(
+  density_coef_plot,
+  aes(
+    x = term,
+    y = estimate
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_pointrange(
+    aes(
+      ymin = ci_low,
+      ymax = ci_high
+    )
+  ) +
+  coord_flip() +
+  labs(
+    title = "Adjusted Differences in Mean Trip Distance",
+    subtitle = "Reference: lowest population density group",
+    x = "Residential population density category",
+    y = "Estimated difference (miles)"
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_density_coef)
+```
+
+### 如何阅读这个图？
+
+如果某个系数点在 0 以下，表示该组相对于最低密度参考组的估计条件平均距离较短。
+
+如果 95% 置信区间横跨 0，在传统 OLS 推断下，就没有足够证据认为该组相对于参考组的差异不为 0。
+
+如果图中某些组的置信区间明显较宽，说明对应系数估计的不确定性较大。
+
+这里的置信区间目前还是传统 OLS 置信区间，尚未对异方差和家庭聚类进行修正。 后续阶段完成诊断和稳健推断后，应考虑更新正式论文中的置信区间。
+
+## 28.3 图二：绘制不同密度组的调整后预测值
+
+除了系数图，我还建议你制作一张预测图。
+
+它可以回答：
+
+> 对于其他模型变量取值相同的成年人，模型预测的平均行程距离如何随居住地人口密度类别变化？
+
+我们先构造一位具有指定特征的“参考受访者”。
+
+例如：
+
+年龄取样本平均年龄，工作状态设为工作者，家庭规模取样本中位数，家庭车辆数设为 1，调查星期取样本中最常见的星期。
+
+然后只改变人口密度等级，其余特征保持不变。
+
+### 第一步：创建预测数据
+
+```{r}
+# =====================================================
+# Step 28.3: Build prediction profiles
+# =====================================================
+
+# Use the most frequent survey day
+reference_day <- names(
+  sort(
+    table(model_data$day_of_week),
+    decreasing = TRUE
+  )
+)[1]
+
+# Number of density categories
+n_density <- nlevels(model_data$density_band)
+
+# Construct a reference profile for each density
+prediction_data <- tibble(
+  density_band = factor(
+    levels(model_data$density_band),
+    levels = levels(model_data$density_band)
+  ),
+
+  # age_c = 0 means sample mean age
+  age_c = rep(0, n_density),
+
+  worker = factor(
+    rep("worker", n_density),
+    levels = levels(model_data$worker)
+  ),
+
+  hh_size = rep(
+    median(model_data$hh_size),
+    n_density
+  ),
+
+  day_of_week = factor(
+    rep(reference_day, n_density),
+    levels = levels(model_data$day_of_week)
+  ),
+
+  car_group = factor(
+    rep("1", n_density),
+    levels = levels(model_data$car_group)
+  )
+)
+
+print(prediction_data)
+```
+
+注意，这只是根据实际数据构造的一个固定特征参考情景，不是每个密度组所有人的真实平均特征，也不是全国人口的调整后边际均值。
+
+### 第二步：使用 M2 预测
+
+```{r}
+# =====================================================
+# Predict conditional means and 95% CIs
+# =====================================================
+
+prediction_results <- predict(
+  m2,
+  newdata = prediction_data,
+  interval = "confidence",
+  level = 0.95
+)
+
+prediction_results <- bind_cols(
+  prediction_data,
+  as_tibble(prediction_results)
+)
+
+print(prediction_results)
+```
+
+`predict()` 使用已拟合的回归模型进行预测。
+
+`newdata` 指定需要预测哪些变量组合。
+
+`interval = "confidence"` 表示输出条件平均值的置信区间，而不是个体新观测值的预测区间。
+
+这两种区间不同：
+
+- Confidence interval： 估计给定特征下的平均结果有多大不确定性。
+- Prediction interval： 估计一个新个体的实际结果可能落在哪个范围，通常更宽。
+
+### 第三步：绘图
+
+```{r}
+# =====================================================
+# Plot adjusted predictions
+# =====================================================
+
+p_adjusted <- ggplot(
+  prediction_results,
+  aes(
+    x = density_band,
+    y = fit
+  )
+) +
+  geom_pointrange(
+    aes(
+      ymin = lwr,
+      ymax = upr
+    )
+  ) +
+  labs(
+    title = "Predicted Mean Trip Distance by Population Density",
+    subtitle = "Conditional predictions from Model M2",
+    x = "Residential population density category",
+    y = "Predicted mean trip distance (miles)",
+    caption = paste(
+      "Other model covariates held at the",
+      "specified reference profile."
+    )
+  ) +
+  theme_minimal(base_size = 12)
+
+print(p_adjusted)
+```
+
+我建议这张图作为最终论文候选的 Figure 3 — Adjusted Predictions of Mean Trip Distance by Population Density。
+
+不过图注必须说清楚，它是在同一参考受访者特征条件下的模型预测，不是每个密度组的实际观测均值，也不是因果反事实估计。
+
+同时，OLS 可能产生负的预测距离，因此应检查预测结果是否出现不合理值。出现这种情况时，应在第五阶段讨论模型设定问题，而不是直接把负值截断成 0 隐藏问题。
+
+# 九、输出和保存第四阶段结果
+
+建议把第四阶段的模型、统计表和图片全部保存下来，后面第五阶段可以直接读取。
+
+```{r}
+# =====================================================
+# Step 28.4: Save regression outputs
+# =====================================================
+
+dir.create(
+  "data/processed",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  "tables",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  "figures",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# Save common regression sample
+saveRDS(
+  model_data,
+  "data/processed/model_data.rds"
+)
+
+# Save the three main models
+saveRDS(
+  list(
+    M0 = m0,
+    M1 = m1,
+    M2 = m2
+  ),
+  "data/processed/regression_models.rds"
+)
+
+# Export regression results
+write_csv(
+  model_fit,
+  "tables/10_model_fit_comparison.csv"
+)
+
+write_csv(
+  regression_table,
+  "tables/11_regression_coefficients.csv"
+)
+
+write_csv(
+  density_comparison,
+  "tables/12_density_coefficient_comparison.csv"
+)
+
+write_csv(
+  prediction_results,
+  "tables/13_adjusted_predictions.csv"
+)
+
+# Export figures
+ggsave(
+  "figures/Figure_3_density_coefficients.png",
+  plot = p_density_coef,
+  width = 8,
+  height = 5.5,
+  dpi = 300
+)
+
+ggsave(
+  "figures/Figure_4_adjusted_predictions.png",
+  plot = p_adjusted,
+  width = 8,
+  height = 5.5,
+  dpi = 300
+)
+```
+
+以上保存的是 M0–M2 三个主模型。若 M3 合理且拟合成功，可以另存交互模型，不需要覆盖主模型。
+
+另外，`model_data.rds` 只包含本阶段的核心建模变量。第二阶段的完整 `analysis_data.rds` 仍需保留，因为第六阶段还会使用个人调查权重、替代人口密度指标和其他调查设计字段。
+
+# 十、回归结果的正确解释方式
+
+你后面写论文时，不应该把 R 输出简单复制进正文，而应围绕研究问题组织解释。
+
+下面是一个中英文结果写作结构，数值留待你完成实际回归后填写。
+
+| 论文部分         | 需要解释的问题                                       |
+| ---------------- | ---------------------------------------------------- |
+| Model M0         | 人口与家庭控制变量和平均行程距离之间有何关系？       |
+| Model M1         | 加入人口密度后，联合检验与各密度组的条件差异是什么？ |
+| Model M2         | 加入汽车拥有量后，密度组系数发生什么变化？           |
+| Model comparison | 模型解释力改善多少？改善是否具有实际研究意义？       |
+| Figure 3         | 调整后人口密度组之间的距离差异是否存在一致趋势？     |
+| Limitations      | 这些关联能否用于因果解释？哪些变量可能遗漏？         |
+
+### 英文写作示例框架
+
+> Model M1 introduces residential population density categories while controlling for age, employment status, household size, and survey day. Relative to the lowest-density category, the estimated coefficients for the remaining density groups indicate [describe the direction and magnitude of the observed differences]. The joint F-test provides [describe the statistical evidence] regarding the additional explanatory contribution of population density.
+>
+> Model M2 further incorporates household vehicle ownership. Compared with M1, the estimated density coefficients [describe how they changed]. These differences suggest that vehicle ownership is relevant to the observed conditional associations, although they do not establish a causal mediation mechanism.
+
+### 中文对应
+
+M1 在控制年龄、就业状态、家庭规模和调查星期的基础上加入居住地人口密度分类。与最低密度组相比，其余各组的估计系数显示了不同的条件平均距离差异。通过联合 F 检验，可以判断人口密度是否在现有控制变量之外提供了额外的统计解释。
+
+M2 进一步纳入家庭汽车拥有量。比较 M1 和 M2 中的密度系数，可以观察控制汽车拥有量后估计关联的变化。但这种变化本身并不能证明汽车拥有量具有因果中介作用。
+
+这里最重要的写作原则是：先描述真实系数，再解释统计不确定性，最后讨论交通行为意义与局限。
+
+不要写成“P 值小于 0.05，因此人口密度影响了出行距离”。横截面回归不能仅凭显著性证明因果关系。
+
+## 十一、哪些分析暂时不要放进第四阶段？
+
+为了保持步骤清晰，以下工作继续留到第五、六阶段。
+
+| 内容                | 所属阶段 | 原因                       |
+| ------------------- | -------- | -------------------------- |
+| Residuals vs Fitted | 第五阶段 | 检查回归函数形式与残差结构 |
+| Q-Q Plot            | 第五阶段 | 检查残差分布               |
+| Breusch–Pagan       | 第五阶段 | 检查异方差                 |
+| Ramsey RESET        | 第五阶段 | 检查函数形式设定           |
+| VIF / GVIF          | 第五阶段 | 检查多重共线性             |
+| Cook's Distance     | 第五阶段 | 检查高影响观测             |
+| `log1p()` 模型比较  | 第六阶段 | 检查因变量变换敏感性       |
+| 家庭聚类标准误      | 第六阶段 | 考虑家庭内部误差相关       |
+| 人口密度尺度替代    | 第六阶段 | 比较 Tract 与 Block Group  |
+| 调查设计加权        | 第六阶段 | 检查权重与抽样设计的影响   |
+| Random Forest / MLP | 独立扩展 | 非正式课程主线             |
+
+需要提前知道： 由于平均行程距离具有很长的右尾，第四阶段的常规 OLS 系数、置信区间和 F 检验都只是初步结果。第五、六阶段必须进一步判断它们是否可靠。
+
+## 十二、第四阶段最终验收清单
+
+第四阶段完成进度
+
+0/14
+
+步骤 23：建立统一且无缺失的回归样本，并核查因子参考类别
+
+步骤 23：完成 M0 基础控制模型
+
+步骤 24：成功建立 M1，获得七个人口密度系数
+
+步骤 24：完成 M0 与 M1 的联合 F 检验
+
+步骤 25：成功建立 M2，并进行 M1 与 M2 比较
+
+步骤 25：生成 M1/M2 人口密度系数变化表
+
+步骤 26：检查密度 × 车辆数的交叉人数与家庭数
+
+步骤 26：决定是否保留可选 M3，并正确比较同分组模型
+
+步骤 27：确认 M0–M2 的回归样本一致
+
+步骤 27：生成 R²、Adjusted R² 和模型比较表
+
+步骤 28：导出三个模型的系数及置信区间
+
+步骤 28：生成密度系数图与调整后预测图
+
+完成所有 CSV、PNG、RDS 结果导出
+
+整理初步研究发现，但暂不下最终稳健性结论
+
+ 复制验收清单
+
+### 第四阶段完成后，最重要的三个文件
+
+| 文件                             | 作用                             |
+| -------------------------------- | -------------------------------- |
+| `regression_models.rds`          | 保存 M0、M1、M2，供第五阶段诊断  |
+| `10_model_fit_comparison.csv`    | 比较模型解释力与拟合指标         |
+| `11_regression_coefficients.csv` | 供论文分析系数、显著性及置信区间 |
+
+第四阶段的真正目标不是得到尽可能高的 \(R^2\)，而是能够用实际结果回答：人口密度是否在基础人口与家庭变量之外提供额外解释？加入家庭车辆数后，这种条件关联如何变化？
+
+完成以后，应当能清楚说明各密度组系数的方向、大小和统计不确定性，以及不同模型之间的差异。随后，第五阶段再系统检验这些 OLS 结论是否受到异方差、错误函数形式、异常观测或多重共线性的影响。
