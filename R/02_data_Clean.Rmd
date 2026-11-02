@@ -202,14 +202,14 @@ stopifnot(
 
 # 读取个人数据
 person <- read_csv(
-  "data/raw/perv2pub.csv",
+  "../data/raw/perv2pub.csv",
   col_types = cols(.default = col_character()),
   show_col_types = FALSE
 )
 
 # 读取行程数据
 trip <- read_csv(
-  "data/raw/tripv2pub.csv",
+  "../data/raw/tripv2pub.csv",
   col_types = cols(.default = col_character()),
   show_col_types = FALSE
 )
