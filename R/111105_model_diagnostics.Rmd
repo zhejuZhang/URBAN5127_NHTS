@@ -1,0 +1,928 @@
+---
+title: "05_model_diagnostics"
+subtitle: "URBAN5127 - Stage 5: Regression Model Diagnostics and Validation"
+date: "2026-11-02"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    code_folding: show
+    df_print: paged
+    theme: readable
+---
+
+# Stage 5: Regression Model Diagnostics and Validation
+
+This R Markdown file extracts the **R analysis code** from the supplied Stage 5 tutorial (Steps 29–34), organised to match the structure of `02_data_Clean.Rmd`, `03_descriptive_EDA.Rmd`, and `04_regression.Rmd`. All headings, explanations, output labels, and code comments are in **English**, with additional notes explaining the purpose of each operation.
+
+**Input:** `data/processed/model_data.rds` and `data/processed/regression_models.rds`, produced in Stage 4.
+
+**Models:** M1 is the main density model before vehicle ownership is added; M2 adds household vehicle ownership and is used for most graphical diagnostics. M3_4, if already saved, is an *optional* four-density-group interaction model.
+
+**Output:** Diagnostic summaries in `tables/diagnostics/` and figures in `figures/diagnostics/`. Existing Stage 4 model files are **not overwritten**.
+
+**Scope:** These diagnostics detect potential problems; they do **not** prove causal identification, automatically invalidate OLS coefficients, or replace household-clustered and survey-design-aware inference.
+
+```{r setup, include=FALSE}
+# Configure how R code and its output appear in the HTML report.
+# echo = TRUE includes the analysis code for reproducibility.
+# message = FALSE suppresses routine package startup messages.
+# warning = TRUE preserves warnings that may be important for diagnostics.
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = TRUE)
+```
+
+## Preparation: packages, saved regression models, and folders
+
+### Install required packages (first use only)
+
+Package installation must be performed manually in the R Console if necessary. The following chunk is intentionally disabled when knitting, so generating HTML does not modify your R library.
+
+```{r install_packages, eval=FALSE}
+# Run this chunk interactively only if one or more packages are missing.
+# tidyverse supplies dplyr, ggplot2, readr, tibble, and related tools.
+# lmtest supplies the Breusch-Pagan and Ramsey RESET tests.
+# car supplies VIF/GVIF collinearity diagnostics.
+# sandwich supplies HC3 heteroskedasticity-robust covariance matrices.
+
+install.packages(c(
+  "tidyverse",
+  "lmtest",
+  "car",
+  "sandwich"
+))
+```
+
+### Load Stage 4 regression data and models
+
+The `.Rmd` file can be located either inside the project's `R/` folder or in the project root. The following path check searches both layouts, then builds platform-independent output paths. This resolves the common `data/processed` versus `../data/processed` issue when switching between RStudio and VSCode.
+
+M0, M1 and M2 are individual `lm` objects **inside** the named RDS list, not three separate RDS files.
+
+```{r load_stage4_models}
+# readRDS() restores saved R objects, including factor contrasts and model metadata.
+# regression_models[["M2"]] extracts one model from the named list.
+# inherits(object, "lm") verifies that the object is a fitted linear model.
+# nobs() reports the number of observations actually used in fitting.
+# Do not assume the sample count matches the tutorial: check the printed result.
+
+# =====================================================
+# Stage 5: Regression Model Diagnostics
+# =====================================================
+
+library(tidyverse)
+library(lmtest)
+library(car)
+library(sandwich)
+
+# Locate the project root using the Stage 4 saved data.
+# Knit typically runs from the R/ directory; a terminal may run from the root.
+if (file.exists("../data/processed/model_data.rds")) {
+  project_root <- ".."
+} else if (file.exists("data/processed/model_data.rds")) {
+  project_root <- "."
+} else {
+  stop("Cannot find model_data.rds. Run Stage 4 and check the project folder.")
+}
+
+# Build cross-platform paths rather than relying on a fixed working directory.
+processed_dir <- file.path(project_root, "data", "processed")
+tables_dir <- file.path(project_root, "tables", "diagnostics")
+figures_dir <- file.path(project_root, "figures", "diagnostics")
+
+# Confirm that both required Stage 4 files exist before proceeding.
+model_file <- file.path(processed_dir, "regression_models.rds")
+stopifnot(file.exists(model_file))
+
+# Read the common person-level regression sample (one row per person).
+model_data <- readRDS(
+  file.path(processed_dir, "model_data.rds")
+)
+
+# Read the saved list of fitted OLS models from Stage 4.
+regression_models <- readRDS(model_file)
+
+# Extract the individual models by name, not by their position in the list.
+m0 <- regression_models[["M0"]]
+m1 <- regression_models[["M1"]]
+m2 <- regression_models[["M2"]]
+
+# Stop if the saved objects are not valid fitted linear models.
+stopifnot(
+  inherits(m0, "lm"),
+  inherits(m1, "lm"),
+  inherits(m2, "lm")
+)
+
+# Print actual observation counts and the main M2 regression summary.
+print(c(M0 = nobs(m0), M1 = nobs(m1), M2 = nobs(m2)))
+cat("Current R working directory:", getwd(), "\n")
+cat("Processed data folder:", normalizePath(processed_dir), "\n")
+print(summary(m2))
+```
+
+### Create the output directories
+
+These directories are created under the project root even when the current document is stored in `R/`. Existing files are left in place; running the export step again will replace files only when their filenames match.
+
+```{r create_output_directories}
+# Create dedicated folders for figures and tabular diagnostic outputs.
+# recursive = TRUE also creates any missing parent folders.
+# showWarnings = FALSE avoids warnings when directories already exist.
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+
+cat("Tables will be saved to:", normalizePath(tables_dir), "\n")
+cat("Figures will be saved to:", normalizePath(figures_dir), "\n")
+```
+
+## Step 29: Residuals versus fitted values and variance patterns
+
+A **residual** is the observed outcome minus the fitted (predicted) outcome for one observation. Residual plots help assess the functional form and changing residual spread. A diagnostic graph is an indication of possible problems, not a proof that model assumptions hold.
+
+### Step 29.1 - Residuals vs Fitted
+
+The base-R `plot.lm(..., which = 1)` draws residuals against fitted values. Pay attention to any curved trend, increasing spread, or isolated observations. The red smoothed line is an exploratory guide.
+
+```{r step_29_1_residuals_fitted}
+# which = 1 selects the standard Residuals vs Fitted diagnostic.
+# The horizontal reference represents zero residual error.
+# A systematic curve can suggest an incomplete conditional-mean specification.
+# A funnel-like spread can suggest heteroskedasticity.
+
+# =====================================================
+# Step 29.1: Residuals vs Fitted
+# =====================================================
+
+plot(
+  m2,
+  which = 1
+)
+```
+
+### Step 29.2 - Scale-Location plot
+
+The Scale-Location plot uses the square root of the absolute standardised residual on the vertical axis. A non-horizontal trend may suggest that residual variance differs across the range of fitted values.
+
+```{r step_29_2_scale_location}
+# which = 3 selects the Scale-Location plot.
+# The graph is a visual check of error dispersion, not a formal hypothesis test.
+# Compare it with the Breusch-Pagan test in Step 31.
+
+# =====================================================
+# Step 29.2: Scale-Location
+# =====================================================
+
+plot(
+  m2,
+  which = 3
+)
+```
+
+### Step 29.3 - Inspect fitted values
+
+Distance is nonnegative, but ordinary least squares does not constrain fitted values to be positive. Count any negative fitted distances rather than silently replacing them with zero.
+
+```{r step_29_3_fitted_values}
+# fitted(m2) returns the predicted response for each model observation.
+# summary() prints quantiles, mean, minimum, and maximum.
+# sum(fitted_values < 0) counts predictions that violate the natural bound.
+# min() and max() display the full range of predicted distances.
+
+# =====================================================
+# Step 29.3: Check fitted values
+# =====================================================
+
+fitted_values <- fitted(m2)
+
+summary(fitted_values)
+
+sum(
+  fitted_values < 0
+)
+
+min(fitted_values)
+max(fitted_values)
+```
+
+## Step 30: Residual distribution and normality
+
+A right-skewed dependent variable is **not** the same as non-normal model errors. The Q-Q plot and residual histogram help identify strong skewness and heavy tails. They do not, by themselves, determine whether an OLS estimate is unbiased.
+
+### Step 30.1 - Normal Q-Q plot
+
+Points far from the reference line, particularly in the tails, indicate differences between the observed residual distribution and a theoretical normal distribution.
+
+```{r step_30_1_qq_plot}
+# which = 2 selects R's Normal Q-Q diagnostic for a fitted lm object.
+# Large upward deviations at the right end can reflect a heavy positive tail.
+# Interpret the graph alongside the influence diagnostics in Step 34.
+
+# =====================================================
+# Step 30.1: Normal Q-Q Plot
+# =====================================================
+
+plot(
+  m2,
+  which = 2
+)
+```
+
+### Step 30.2 - Histogram of standardised residuals
+
+The standardised residual accounts for an estimated residual scale and leverage. It is more comparable across observations than a residual expressed directly in miles.
+
+```{r step_30_2_residual_histogram}
+# tibble() stores fitted, raw-residual, and standardised-residual vectors.
+# rstandard() extracts internally standardised residuals from the fitted model.
+# ggplot() and geom_histogram(bins = 60) visualise their empirical distribution.
+# print() makes the ggplot appear when running an individual code chunk.
+
+# =====================================================
+# Step 30.2: Residual histogram
+# =====================================================
+
+residual_data <- tibble(
+  fitted_value = fitted(m2),
+  residual = residuals(m2),
+  standardized_residual = rstandard(m2)
+)
+
+p_residual_hist <- ggplot(
+  residual_data,
+  aes(x = standardized_residual)
+) +
+  geom_histogram(
+    bins = 60,
+    colour = "white"
+  ) +
+  labs(
+    title = "Distribution of Standardized Residuals",
+    subtitle = "Model M2",
+    x = "Standardized residual",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(p_residual_hist)
+```
+
+### Step 30.3 - Print residual summaries and flag unusually large values
+
+A magnitude above 3 is an **exploratory flag**, not an instruction to delete data. Shapiro-Wilk is not included as a required test because the full NHTS sample exceeds the sample-size supported by base R's `shapiro.test()` and because visual tail assessment is more useful here.
+
+```{r step_30_3_residual_summary}
+# summary(residuals(m2)) reports residuals in miles.
+# summary(rstandard(m2)) reports standardised residuals.
+# abs(...) > 3 flags unusually large standardised residuals.
+# Do not automatically classify flagged respondents as data-entry errors.
+
+summary(residuals(m2))
+
+summary(rstandard(m2))
+
+sum(abs(rstandard(m2)) > 3)
+```
+
+## Step 31: Breusch-Pagan heteroskedasticity tests
+
+The null hypothesis of the Breusch-Pagan test is homoskedasticity under the tested auxiliary specification. A small p-value is evidence against that null; a large p-value does **not** prove constant variance. The test does not itself correct for household clustering.
+
+### Step 31.1 - Test M2
+
+`lmtest::bptest()` uses its studentised version by default.
+
+```{r step_31_1_bp_m2}
+# bptest(m2) tests whether residual variance relates to the model regressors.
+# print(bp_m2) displays the test statistic, degrees of freedom and p-value.
+# Interpret a small p-value as evidence of heteroskedasticity, not proof of its source.
+
+# =====================================================
+# Step 31.1: Breusch-Pagan test
+# =====================================================
+
+bp_m2 <- lmtest::bptest(m2)
+
+print(bp_m2)
+```
+
+### Step 31.2 - Compare M1 and M2
+
+The two BP tests may behave differently because the models use different regressors. Their test statistics are not a general-purpose score for selecting a "better" regression model.
+
+```{r step_31_2_bp_comparison}
+# BP tests use the residuals and explanatory variables from each specific model.
+# Keep both result objects for the diagnostic summary in a later section.
+
+# Test the earlier M1 model using the same bptest() procedure.
+bp_m1 <- lmtest::bptest(m1)
+
+# The M2 result was already calculated in Step 31.1.
+# Print both results to compare the evidence for heteroskedasticity.
+print(bp_m1)
+print(bp_m2)
+```
+
+### Optional: Preview HC3 robust standard errors
+
+The original tutorial includes an HC3 preview using `sandwich::vcovHC()` and `lmtest::coeftest()`. This changes the estimated **coefficient covariance matrix**, not the OLS point estimates. HC3 does not account for correlated errors among people from the same household; full household-clustered inference belongs to the next stage.
+
+```{r step_31_3_hc3_preview}
+# summary(m2) reports conventional OLS standard errors.
+# vcovHC(..., type = "HC3") produces a heteroskedasticity-robust covariance matrix.
+# coeftest(..., vcov. = ...) recomputes coefficient tests using that matrix.
+# The survey sampling design and within-household dependence remain separate issues.
+
+# Conventional OLS inference
+summary(m2)
+
+# HC3 heteroscedasticity-robust inference
+lmtest::coeftest(
+  m2,
+  vcov. = sandwich::vcovHC(
+    m2,
+    type = "HC3"
+  )
+)
+```
+
+## Step 32: Ramsey RESET specification tests
+
+The RESET test adds powers of fitted values and tests whether they provide additional explanatory power. A rejection can suggest misspecified functional form or other specification limitations, but it does not identify a specific omitted variable or establish causality.
+
+### Step 32.1 - Test M2
+
+```{r step_32_1_reset_m2}
+# resettest() performs a regression specification error test.
+# power = 2:3 tests the squared and cubed fitted-value terms.
+# type = "fitted" uses fitted values to build these additional terms.
+# The printed p-value is meaningful only in the context of the test assumptions.
+
+# =====================================================
+# Step 32.1: Ramsey RESET test
+# =====================================================
+
+reset_m2 <- lmtest::resettest(
+  m2,
+  power = 2:3,
+  type = "fitted"
+)
+
+print(reset_m2)
+```
+
+### Step 32.2 - Compare M1 and M2
+
+```{r step_32_2_reset_comparison}
+# Keep the tested powers identical when discussing M1 and M2.
+# Neither test automatically suggests which missing term should be added.
+
+# Apply the same RESET specification to M1.
+reset_m1 <- lmtest::resettest(
+  m1,
+  power = 2:3,
+  type = "fitted"
+)
+
+# M2 was tested in the previous chunk: print both test objects.
+print(reset_m1)
+print(reset_m2)
+```
+
+## Step 33: Multicollinearity - VIF and GVIF
+
+A high variance inflation factor indicates that a coefficient may be less precisely estimated because of linear relationships among predictors. Categorical terms with multiple degrees of freedom may require the **generalised** VIF. Do not compare raw GVIF values with ordinary single-degree-of-freedom VIF thresholds.
+
+### Step 33.1 - Print VIF/GVIF output
+
+```{r step_33_1_vif}
+# car::vif(m2) computes a VIF/GVIF diagnostic for the fitted M2 model.
+# For factor terms, the output may have GVIF, Df and GVIF^(1/(2*Df)) columns.
+# Centre age in the earlier stage to reduce unnecessary linear dependence with age squared.
+# Collinearity is not a justification to drop the theoretically central density variable.
+
+# =====================================================
+# Step 33.1: VIF / GVIF
+# =====================================================
+
+vif_m2 <- car::vif(m2)
+
+print(vif_m2)
+```
+
+### Step 33.2 - Convert VIF results into an exportable table
+
+`car::vif()` can return either a numeric vector (ordinary VIF) or a matrix (GVIF-style output). This code handles both and retains predictor labels.
+
+```{r step_33_2_vif_table}
+# is.matrix() determines whether the VIF result has multiple statistics per term.
+# as_tibble(..., rownames = "term") keeps the original variable names.
+# For a numeric VIF vector, tibble() creates a two-column table instead.
+# The resulting vif_table is exported in the final section.
+
+# =====================================================
+# Step 33.2: Export VIF / GVIF results
+# =====================================================
+
+vif_result <- car::vif(m2)
+
+if (is.matrix(vif_result)) {
+
+  vif_table <- tibble::as_tibble(
+    vif_result,
+    rownames = "term"
+  )
+
+} else {
+
+  vif_table <- tibble(
+    term = names(vif_result),
+    VIF = as.numeric(vif_result)
+  )
+
+}
+
+print(vif_table)
+```
+
+## Step 34: Residual outliers, leverage and influential observations
+
+Three related but distinct concepts are examined: unusually large residuals, unusual predictor configurations (**leverage**), and observations that can change coefficient estimates (**influence**). Very long legitimate journeys must not be removed merely because they are extreme.
+
+### Step 34.1 - Cook's Distance plot
+
+```{r step_34_1_cooks_plot}
+# which = 4 plots Cook's Distance for observations used in M2.
+# Extremely tall values merit investigation, but influence does not imply invalid data.
+# The numerical Cook's Distance values are extracted below.
+
+# =====================================================
+# Step 34.1: Cook's Distance plot
+# =====================================================
+
+plot(
+  m2,
+  which = 4
+)
+```
+
+### Step 34.2 - Residuals vs Leverage plot
+
+```{r step_34_2_residuals_leverage}
+# which = 5 draws residuals against leverage, often with Cook's contours.
+# High leverage reflects unusual explanatory-variable combinations.
+# High leverage alone does not necessarily imply a large residual or influential case.
+
+# =====================================================
+# Step 34.2: Residuals vs Leverage
+# =====================================================
+
+plot(
+  m2,
+  which = 5
+)
+```
+
+### Step 34.3 - Extract observation-level influence measures
+
+These numbers have the **same ordering as the observations used by M2**. Do not attach `HOUSEID` and `PERSONID` until you have verified that `model_data` rows align with the model frame.
+
+```{r step_34_3_influence_measures}
+# model.response(model.frame(m2)) retrieves the observed response actually fitted.
+# rstandard() and rstudent() calculate internal and external studentised residuals.
+# hatvalues() returns leverage values from the model hat matrix.
+# cooks.distance() quantifies each observation's effect on the fitted model.
+# seq_len(nobs(m2)) provides local row indices, not respondent identifiers.
+
+# =====================================================
+# Step 34.3: Extract influence measures
+# =====================================================
+
+influence_data <- tibble(
+  observation = seq_len(nobs(m2)),
+
+  actual = as.numeric(
+    model.response(model.frame(m2))
+  ),
+
+  fitted = as.numeric(fitted(m2)),
+
+  residual = as.numeric(residuals(m2)),
+
+  standardized_residual = as.numeric(
+    rstandard(m2)
+  ),
+
+  studentized_residual = as.numeric(
+    rstudent(m2)
+  ),
+
+  leverage = as.numeric(
+    hatvalues(m2)
+  ),
+
+  cooks_d = as.numeric(
+    cooks.distance(m2)
+  )
+)
+
+print(
+  summary(influence_data)
+)
+```
+
+### Step 34.4 - Flag observations for manual review
+
+The following exploratory thresholds are taken from the tutorial: absolute externally studentised residual greater than 3; leverage greater than `2p/n`; and Cook's D greater than `4/n`, where `p` is model rank and `n` is model sample size. They are **screening heuristics**, not deletion rules.
+
+```{r step_34_4_flag_influence}
+# nobs(m2) counts fitted observations; m2$rank is the model matrix rank.
+# mutate() adds logical flags for residual size, leverage, and Cook's D.
+# summarise() counts flagged observations and reports the maximum Cook's D.
+# na.rm = TRUE prevents a missing diagnostic entry from hiding all other counts.
+
+# =====================================================
+# Step 34.4: Flag potentially influential cases
+# =====================================================
+
+n_model <- nobs(m2)
+
+p_model <- m2$rank
+
+influence_data <- influence_data %>%
+  mutate(
+    flag_residual = abs(studentized_residual) > 3,
+
+    flag_leverage = leverage > 2 * p_model / n_model,
+
+    flag_cooks = cooks_d > 4 / n_model
+  )
+
+# Count flagged observations
+influence_summary <- influence_data %>%
+  summarise(
+    total_n = n(),
+
+    large_residual_n = sum(
+      flag_residual,
+      na.rm = TRUE
+    ),
+
+    high_leverage_n = sum(
+      flag_leverage,
+      na.rm = TRUE
+    ),
+
+    high_cooks_n = sum(
+      flag_cooks,
+      na.rm = TRUE
+    ),
+
+    max_cooks_d = max(cooks_d, na.rm = TRUE)
+  )
+
+print(influence_summary)
+```
+
+### Step 34.5 - Inspect the 20 highest Cook's Distance observations
+
+```{r step_34_5_top_influence}
+# arrange(desc(cooks_d)) sorts the diagnostic data by decreasing influence.
+# slice_head(n = 20) selects the 20 largest values for human inspection.
+# These values are data diagnostics; they are not automatically errors.
+
+# =====================================================
+# Step 34.5: Inspect the largest Cook's distances
+# =====================================================
+
+top_influence <- influence_data %>%
+  arrange(desc(cooks_d)) %>%
+  slice_head(n = 20)
+
+print(top_influence, n = 20)
+```
+
+### Step 34.6 - Optionally attach respondent identifiers after an alignment check
+
+**Important:** Linking diagnostics to the wrong person can invalidate any follow-up record review. The code only binds identifiers if both row count and row order match. If the test fails, it leaves the anonymous diagnostic table intact and prints a warning.
+
+```{r step_34_6_attach_ids_if_safe}
+# The comparison checks both the row names and the actual response vector.
+# A matching row count alone would not establish a valid one-to-one alignment.
+# Only when aligned are HOUSEID, PERSONID, density_band and car_group attached.
+# If alignment fails, do not join diagnostics to IDs by position.
+
+# =====================================================
+# Optional: Attach person IDs only if row order matches
+# =====================================================
+
+rows_match <- (
+  nrow(model_data) == nobs(m2) &&
+  identical(
+    rownames(model_data),
+    rownames(model.frame(m2))
+  ) &&
+  isTRUE(all.equal(
+    as.numeric(model_data$mean_trip_miles),
+    as.numeric(model.response(model.frame(m2))),
+    tolerance = 1e-8
+  ))
+)
+
+if (rows_match) {
+
+  influence_data <- bind_cols(
+    model_data %>%
+      select(
+        HOUSEID,
+        PERSONID,
+        density_band,
+        car_group
+      ),
+    influence_data
+  )
+
+  top_influence <- influence_data %>%
+    arrange(desc(cooks_d)) %>%
+    slice_head(n = 20)
+
+} else {
+
+  message(
+    "Model rows or outcomes are not aligned with model_data.",
+    " Do not attach IDs until row matching is verified."
+  )
+}
+```
+
+## Optional: Diagnostics for the interaction model M3_4
+
+The supplied tutorial suggests diagnosing M3_4 separately if you fitted and saved it. This section **does not refit M3_4** or automatically treat it as the primary model. It looks for either `interaction_models.rds` (a model list saved by the earlier Stage 5 workflow) or a standalone `model_m3_4.rds`. If neither exists, it reports that the extension is unavailable without failing the HTML build.
+
+```{r optional_load_m3}
+# A previously saved M3_4 may have a different density coding from M2.
+# alias() identifies fully linearly dependent model terms that cannot be estimated.
+# Sparse density-by-vehicle groups can still produce unstable estimates without exact aliasing.
+# Optional M3 plots and tests are left disabled below until you decide to analyse M3.
+
+# Load an optional M3_4 model only if a valid saved lm object exists.
+# This does NOT replace the primary M2 model or change its coefficients.
+m3_4 <- NULL
+interaction_bundle_file <- file.path(processed_dir, "interaction_models.rds")
+standalone_m3_file <- file.path(processed_dir, "model_m3_4.rds")
+
+if (file.exists(interaction_bundle_file)) {
+  interaction_bundle <- readRDS(interaction_bundle_file)
+  if (is.list(interaction_bundle) &&
+      inherits(interaction_bundle[["M3_4"]], "lm")) {
+    m3_4 <- interaction_bundle[["M3_4"]]
+  }
+}
+
+if (is.null(m3_4) && file.exists(standalone_m3_file)) {
+  candidate_m3 <- readRDS(standalone_m3_file)
+  if (inherits(candidate_m3, "lm")) {
+    m3_4 <- candidate_m3
+  }
+}
+
+if (inherits(m3_4, "lm")) {
+  cat("Optional M3_4 model found: N =", nobs(m3_4), "\n")
+  print(summary(m3_4))
+  print(alias(m3_4))
+} else {
+  cat("Optional M3_4 model not found. M1/M2 diagnostics remain complete.\n")
+}
+```
+
+### Optional extra M3_4 plots and tests (not evaluated by default)
+
+Enable this chunk only after confirming that `m3_4` is a valid fitted model. Its BP/RESET results assess the interaction model itself, not M2.
+
+```{r optional_m3_diagnostics, eval=FALSE}
+# eval = FALSE prevents an absent optional M3 from breaking Knit.
+# Enabling this chunk creates extra plots and hypothesis-test results for M3_4.
+
+# Check that the saved model is available before enabling this chunk.
+stopifnot(inherits(m3_4, "lm"))
+
+# Compare residual structure with the primary M2 results.
+plot(m3_4, which = 1)  # Residuals vs Fitted
+plot(m3_4, which = 2)  # Normal Q-Q
+plot(m3_4, which = 5)  # Residuals vs Leverage
+
+# Test heteroskedasticity and functional form in the M3 extension.
+print(lmtest::bptest(m3_4))
+print(lmtest::resettest(m3_4, power = 2:3, type = "fitted"))
+```
+
+## Consolidated model-diagnostic summary
+
+The summary below reproduces the tutorial's M1/M2 comparison in a compact table. It collects actual values when the notebook runs. VIF/GVIF is exported separately because those values are reported **per predictor term**, not as a single model statistic.
+
+```{r build_diagnostic_summary}
+# Define one reusable function that accepts an lm object and model name.
+# Within each model, bptest() and resettest() generate the inferential diagnostics.
+# max(cooks.distance()) records the largest observed Cook's D.
+# sum(Cook's D > 4/n) counts cases flagged by the exploratory threshold.
+# bind_rows() combines the M1 and M2 result rows into one CSV-ready tibble.
+
+# =====================================================
+# Stage 5: Diagnostic summary table
+# =====================================================
+
+run_model_tests <- function(model, model_name) {
+
+  bp <- lmtest::bptest(model)
+
+  reset <- lmtest::resettest(
+    model,
+    power = 2:3,
+    type = "fitted"
+  )
+
+  tibble(
+    Model = model_name,
+
+    N = nobs(model),
+
+    BP_statistic = unname(bp$statistic),
+    BP_p_value = bp$p.value,
+
+    RESET_statistic = unname(reset$statistic),
+    RESET_p_value = reset$p.value,
+
+    Max_Cooks_D = max(
+      cooks.distance(model),
+      na.rm = TRUE
+    ),
+
+    High_Cooks_N = sum(
+      cooks.distance(model) > 4 / nobs(model),
+      na.rm = TRUE
+    )
+  )
+}
+
+diagnostic_summary <- bind_rows(
+  run_model_tests(m1, "M1"),
+  run_model_tests(m2, "M2")
+)
+
+print(diagnostic_summary)
+```
+
+### Optional: Include M3_4 in the summary (not evaluated by default)
+
+If you intend to report the interaction model, you may include its separate results. M2 and M3_4 should not be treated as models differing only by one interaction term if their density coding differs.
+
+```{r optional_m3_summary, eval=FALSE}
+# This is a separate sensitivity/model-extension result, not an automatic replacement for M2.
+
+# Only run after loading and validating M3_4.
+stopifnot(inherits(m3_4, "lm"))
+print(run_model_tests(m3_4, "M3_4"))
+```
+
+## Export Stage 5 results
+
+All CSV files are written to `tables/diagnostics/`. Figures are written to `figures/diagnostics/` as high-resolution PNGs. The original `regression_models.rds` and `model_data.rds` from Stage 4 remain unchanged. Re-running these exports updates the named output files.
+
+```{r export_diagnostic_tables}
+# write_csv() saves a tibble as a plain CSV file for later inspection.
+# The path variables were created earlier, so outputs go to the same folders
+# whether Knit starts in R/ or code runs interactively from the project root.
+# These CSV files contain real results only after the model analyses have run.
+
+# =====================================================
+# Export Stage 5 diagnostic tables
+# =====================================================
+
+# Export the joint M1/M2 BP, RESET and influence summary.
+write_csv(
+  diagnostic_summary,
+  file.path(tables_dir, "01_model_diagnostic_tests.csv")
+)
+
+# Export the VIF/GVIF table for the M2 regressors.
+write_csv(
+  vif_table,
+  file.path(tables_dir, "02_multicollinearity.csv")
+)
+
+# Export screening-flag counts and maximum influence.
+write_csv(
+  influence_summary,
+  file.path(tables_dir, "03_influence_summary.csv")
+)
+
+# Export the highest Cook's D cases (with IDs only if alignment was confirmed).
+write_csv(
+  top_influence,
+  file.path(tables_dir, "04_top_influential_observations.csv")
+)
+
+# Print a list of actual output names so you can verify the CSV exports.
+cat("Exported diagnostic tables:\n")
+print(list.files(tables_dir, pattern = "\\.csv$"))
+```
+
+### Export the standardised residual histogram
+
+```{r export_residual_histogram}
+# ggsave() exports a stored ggplot to a high-resolution PNG file.
+# The width and height are in inches; dpi sets the raster resolution.
+
+# Save the ggplot object created in Step 30.2.
+ggsave(
+  filename = file.path(figures_dir, "M2_residual_histogram.png"),
+  plot = p_residual_hist,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+cat("Saved M2 residual histogram.\n")
+```
+
+### Export five standard base-R diagnostic figures
+
+`plot.lm()` draws immediately to the active graphics device, so its images are exported using `png()` followed by `dev.off()`. The five figures cover residuals versus fitted values, Normal Q-Q, Scale-Location, Cook's Distance, and residuals versus leverage.
+
+```{r export_base_r_figures}
+# png() opens a bitmap device; plot(m2, which = ...) renders into it.
+# dev.off() is required to finish the file and release the graphics device.
+# You will see each exported .png in figures/diagnostics/.
+# Exported images represent actual outputs, not the illustrative tutorial figures.
+
+# Save the same five standard plots used earlier in this notebook.
+# Each png() opens a new graphics device; dev.off() closes and saves it.
+# In base R, which = 1, 2, 3, 4 and 5 select different lm diagnostic charts.
+
+png(
+  filename = file.path(figures_dir, "M2_residuals_vs_fitted.png"),
+  width = 1600, height = 1100, res = 180
+)
+plot(m2, which = 1)
+dev.off()
+
+png(
+  filename = file.path(figures_dir, "M2_qq_plot.png"),
+  width = 1600, height = 1100, res = 180
+)
+plot(m2, which = 2)
+dev.off()
+
+png(
+  filename = file.path(figures_dir, "M2_scale_location.png"),
+  width = 1600, height = 1100, res = 180
+)
+plot(m2, which = 3)
+dev.off()
+
+png(
+  filename = file.path(figures_dir, "M2_cooks_distance.png"),
+  width = 1600, height = 1100, res = 180
+)
+plot(m2, which = 4)
+dev.off()
+
+png(
+  filename = file.path(figures_dir, "M2_residuals_leverage.png"),
+  width = 1600, height = 1100, res = 180
+)
+plot(m2, which = 5)
+dev.off()
+
+cat("Exported diagnostic figures:\n")
+print(list.files(figures_dir, pattern = "\\.png$"))
+```
+
+## How to interpret the exported results
+
+- **Residuals vs Fitted / Scale-Location:** Look for systematic patterns or changes in residual spread.
+- **Normal Q-Q / histogram:** Describe asymmetric tails or unusually large residuals; do not demand that the original trip-distance variable is normal.
+- **Breusch-Pagan:** Report the test statistic and p-value, while recognising that it does not address household clustering.
+- **Ramsey RESET:** Describe evidence about the tested model specification; the test cannot identify a particular omitted factor.
+- **VIF/GVIF:** Evaluate individual terms and their uncertainty, especially multi-category predictors.
+- **Cook's Distance / leverage:** Investigate flagged records; do not delete them solely because they affect coefficients.
+
+This stage documents possible limitations of the conventional OLS models. **Stage 6** can then compare HC3 standard errors, household-clustered inference, log-transformed outcomes, alternate spatial-density measures, extreme-value sensitivity, and weighting, as appropriate to the available data and research design.
+
+### Suggested analysis checklist
+
+- [ ] Stage 4 regression RDS files load correctly.
+- [ ] M2 Residuals vs Fitted and Scale-Location figures are produced.
+- [ ] M2 Q-Q plot and standardised residual histogram are produced.
+- [ ] BP and RESET results are obtained for both M1 and M2.
+- [ ] M2 VIF/GVIF results are interpreted correctly.
+- [ ] Influence measures, screening flags and top 20 cases are reviewed.
+- [ ] Optional M3_4 diagnostics are considered separately if available.
+- [ ] CSV tables and PNG charts are successfully exported.
+- [ ] Main model limitations and planned sensitivity analyses are recorded.
+
+### Knit instructions
+
+Save this file as `R/05_model_diagnostics.Rmd` (or in the project root), open it in RStudio, and choose **Knit → Knit to HTML**. Knit executes enabled R chunks in order in a fresh R session. Install missing packages and complete Stage 4 before knitting.
+
