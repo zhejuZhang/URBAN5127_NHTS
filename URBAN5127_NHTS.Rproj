@@ -13,3 +13,5 @@ RnwWeave: Sweave
 LaTeX: pdfLaTeX
 
 ProjectName: URBAN5127_NHTS
+
+EditorTheme: Twilight

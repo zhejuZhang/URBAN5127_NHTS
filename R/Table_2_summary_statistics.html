@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Table 2 - Summary Statistics</title>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #171717;
+  color: #f2f2f2;
+  margin: 40px;
+}
+
+h3 {
+  font-size: 18px;
+  margin-bottom: 22px;
+}
+
+.table-container {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 1120px;
+  font-size: 13px;
+}
+
+th, td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid #303030;
+  white-space: nowrap;
+}
+
+th {
+  font-weight: 600;
+}
+
+.section td {
+  font-weight: 700;
+  padding-top: 17px;
+  border-bottom: 1px solid #303030;
+}
+
+.notes {
+  font-size: 12px;
+  color: #aaaaaa;
+  margin-top: 18px;
+  line-height: 1.6;
+}
+
+@media print {
+  body {
+    background: white;
+    color: black;
+    margin: 12mm;
+  }
+  th, td, .section td {
+    border-bottom-color: #cccccc;
+  }
+  .notes { color: #444444; }
+}
+</style>
+</head>
+
+<body>
+
+<h3>
+Table 2: Summary Statistics by Residential Population Density
+</h3>
+
+<div class="table-container">
+<table>
+<thead><tr><th>Variable</th><th>D1</th><th>D2</th><th>D3</th><th>D4</th><th>D5</th><th>D6</th><th>D7</th><th>D8</th><th>Total</th></tr></thead>
+
+<tbody><tr><td>N</td><td>1,139</td><td>1,330</td><td>772</td><td>1,272</td><td>1,916</td><td>1,920</td><td>438</td><td>265</td><td>9,052</td></tr>
+<tr class="section"><td colspan="10">Mean trip distance (miles)</td></tr>
+<tr><td>Mean (SD)</td><td>21.82 (54.38)</td><td>23.28 (86.05)</td><td>16.27 (43.22)</td><td>20.54 (72.07)</td><td>17.17 (73.05)</td><td>15.39 (82.31)</td><td>11.76 (50.14)</td><td>11.32 (37.32)</td><td>18.24 (71.32)</td></tr>
+<tr><td>Median (IQR)</td><td>9.57 (4.44 - 18.99)</td><td>7.44 (3.52 - 16.11)</td><td>5.87 (2.83 - 14.01)</td><td>5.94 (2.95 - 12.38)</td><td>5.05 (2.35 - 11.91)</td><td>4.27 (2.10 - 9.57)</td><td>3.84 (1.68 - 8.36)</td><td>2.07 (0.77 - 5.10)</td><td>5.57 (2.53 - 12.86)</td></tr>
+<tr><td>Range</td><td>0.00 - 822.61</td><td>0.00 - 1502.06</td><td>0.00 - 446.32</td><td>0.00 - 798.24</td><td>0.00 - 1375.78</td><td>0.00 - 2435.91</td><td>0.00 - 636.63</td><td>0.09 - 343.13</td><td>0.00 - 2435.91</td></tr>
+<tr class="section"><td colspan="10">Age (years)</td></tr>
+<tr><td>Mean (SD)</td><td>53.66 (16.37)</td><td>53.69 (16.82)</td><td>52.45 (16.73)</td><td>52.85 (17.63)</td><td>51.74 (16.98)</td><td>50.40 (17.23)</td><td>46.34 (16.71)</td><td>45.76 (17.28)</td><td>51.76 (17.12)</td></tr>
+<tr class="section"><td colspan="10">Household size</td></tr>
+<tr><td>Mean (SD)</td><td>2.55 (1.23)</td><td>2.69 (1.41)</td><td>2.68 (1.35)</td><td>2.57 (1.27)</td><td>2.58 (1.29)</td><td>2.58 (1.37)</td><td>2.35 (1.29)</td><td>2.04 (1.05)</td><td>2.57 (1.32)</td></tr>
+<tr class="section"><td colspan="10">Employment status, n (%)</td></tr>
+<tr><td>Worker</td><td>675 (59.3%)</td><td>782 (58.8%)</td><td>481 (62.3%)</td><td>763 (60.0%)</td><td>1,209 (63.1%)</td><td>1,194 (62.2%)</td><td>329 (75.1%)</td><td>186 (70.2%)</td><td>5,619 (62.1%)</td></tr>
+<tr><td>Non-worker</td><td>464 (40.7%)</td><td>548 (41.2%)</td><td>291 (37.7%)</td><td>509 (40.0%)</td><td>707 (36.9%)</td><td>726 (37.8%)</td><td>109 (24.9%)</td><td>79 (29.8%)</td><td>3,433 (37.9%)</td></tr>
+<tr class="section"><td colspan="10">Household vehicle ownership, n (%)</td></tr>
+<tr><td>0 vehicles</td><td>6 (0.5%)</td><td>16 (1.2%)</td><td>10 (1.3%)</td><td>18 (1.4%)</td><td>40 (2.1%)</td><td>76 (4.0%)</td><td>27 (6.2%)</td><td>93 (35.1%)</td><td>286 (3.2%)</td></tr>
+<tr><td>1 vehicle</td><td>189 (16.6%)</td><td>241 (18.1%)</td><td>168 (21.8%)</td><td>259 (20.4%)</td><td>436 (22.8%)</td><td>573 (29.8%)</td><td>208 (47.5%)</td><td>124 (46.8%)</td><td>2,198 (24.3%)</td></tr>
+<tr><td>2+ vehicles</td><td>944 (82.9%)</td><td>1,073 (80.7%)</td><td>594 (76.9%)</td><td>995 (78.2%)</td><td>1,440 (75.2%)</td><td>1,271 (66.2%)</td><td>203 (46.3%)</td><td>48 (18.1%)</td><td>6,568 (72.6%)</td></tr></tbody>
+</table>
+</div>
+
+<p class="notes">
+D1 = 0–99; D2 = 100–499; D3 = 500–999;
+D4 = 1,000–1,999; D5 = 2,000–3,999;
+D6 = 4,000–9,999; D7 = 10,000–24,999;
+D8 = 25,000+ persons per square mile.
+<br>
+SD = standard deviation; IQR is shown as Q1–Q3.
+Percentages are calculated within each density group.
+All statistics are unweighted.
+Source: 2022 NextGen NHTS.
+</p>
+
+</body>
+</html>

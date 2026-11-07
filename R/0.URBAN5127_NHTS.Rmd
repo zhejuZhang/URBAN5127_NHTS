@@ -7,7 +7,290 @@ date: "2026-10-15"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+install.packages(c("tidyverse","dplyr", "gtsummary", "gt"))
+library(tidyverse)
+library(dplyr)
+library(gtsummary)
+library(gt)
+getwd()
 ```
+
+# inroduction
+
+first pragrafers
+
+In this paper, we will utilise data from the 2022 NextGen National Household Travel Survey (NHTS) to examine the relationship between residential population density and mean trip distance among adult travelers in the United States. We will test whether this relationship remains after controlling for individual and household characteristics, such as age, employment status, household size, and survey day. We will also investigate whether the relationship varies according to household vehicle ownership.
+
+---
+
+# Data
+
+We first select the variables we will use in the analysis. The following variables are used:
+
+Table 1. Variable Names and Definitions
+
+| Variable                               | Description                                                                                                                                                                           |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mean trip distance                     | Mean distance per recorded trip for each adult traveller on their assigned travel day, measured in miles.                                                                             |
+| Residential population density         | Census tract population density at the respondent's residential location, classified into eight categories (HTPPOPDN).                                                                |
+| Aggregated population density          | Residential population density reclassified into four categories for the interaction model (M3).                                                                                      |
+| Age                                    | Age of the respondent in years.                                                                                                                                                       |
+| Age squared                            | Squared centred age term used to account for potential nonlinear associations between age and mean trip distance.                                                                     |
+| Employment status                      | Employment status of the respondent, classified as worker or non-worker.                                                                                                              |
+| Household size                         | Number of people living in the respondent's household.                                                                                                                                |
+| Survey day                             | Day of the week on which the respondent's travel activities were recorded.                                                                                                            |
+| Household vehicle ownership            | Number of vehicles available to the household, classified into zero, one, and two or more vehicles.                                                                                   |
+| Population density × Vehicle ownership | Interaction between aggregated residential population density and household vehicle ownership, used to examine whether their associations with mean trip distance vary across groups. |
+
+Note: Mean trip distance is the dependent variable. Residential population density is the main independent variable. The remaining demographic and household characteristics are included as controls or extensions across M0–M3. The interaction term is constructed within M3 rather than being an original NHTS variable.
+
+
+
+We filter the data to include relevant observations and exclude invalid or incomplete records. We also construct the variables required for the analysis. The original person-level dataset from the 2022 NextGen National Household Travel Survey (NHTS) contains 16,997 respondents. Trip-level records are aggregated to the individual level using household and person identifiers (HOUSEID and PERSONID). Mean trip distance is calculated as the average distance of all valid recorded trips for each respondent. The data are filtered according to the following rules:
+
+1. Include only adults aged 18 years or older.
+2. Include only respondents who recorded at least one trip on their assigned travel day.
+3. Exclude respondents with any invalid or missing trip distances, including negative values used to indicate missing information. Valid zero-distance records are retained.
+4. Include only respondents with valid residential population density classifications (HTPPOPDN), corresponding to the eight density categories.
+5. Exclude observations with invalid values for the core control variables, including employment status, household size, household vehicle ownership, and survey day, or invalid personal survey weights.
+
+```{r}
+# 确认文件存在
+stopifnot(
+  file.exists("../data/raw/perv2pub.csv"),
+  file.exists("../data/raw/tripv2pub.csv")
+)
+
+# 读取个人数据
+person <- read_csv(
+  "../data/raw/perv2pub.csv",
+  col_types = cols(.default = col_character()),
+  show_col_types = FALSE
+)
+
+# 读取行程数据
+trip <- read_csv(
+  "../data/raw/tripv2pub.csv",
+  col_types = cols(.default = col_character()),
+  show_col_types = FALSE
+)
+
+# 查看数据规模
+dim(person)
+dim(trip)
+
+# 查看字段结构
+glimpse(person)
+glimpse(trip)
+
+# 检查核心变量是否存在
+required_person <- c(
+  "HOUSEID", "PERSONID", "R_AGE",
+  "HTPPOPDN", "CNTTDTR",
+  "WORKER", "HHSIZE", "HHVEHCNT",
+  "TRAVDAY", "TDAYDATE", "WTPERFIN"
+)
+
+required_trip <- c(
+  "HOUSEID", "PERSONID",
+  "TRIPID", "TRPMILES"
+)
+
+stopifnot(
+  all(required_person %in% names(person)),
+  all(required_trip %in% names(trip))
+)
+
+dim(person)
+
+dim(trip)
+
+
+```
+
+
+The final analytical sample consists of **9,052 adult travelers from 6,113 households**, compared with the initial 16,997 respondents. This reduction mainly reflects the exclusion of underage respondents and adults who recorded no trips. Since the dependent variable measures mean distance per recorded trip, respondents without recorded trips cannot be included. In Table 2, we present the descriptive statistics for the final analytical sample.
+
+
+
+```{r}
+# 1. 读取数据
+Data <- readRDS("../data/processed/analysis_data.rds")
+
+# 2. 按八档人口密度分组
+groups <- lapply(sprintf("%02d", 1:8), function(x) {
+  Data[as.character(Data$density_band) == x, ]
+})
+
+names(groups) <- paste0("D", 1:8)
+groups$Total <- Data
+
+# 3. 定义统计函数
+mean_sd <- function(d, v) {
+  x <- d[[v]]
+  sprintf("%.2f (%.2f)", mean(x), sd(x))
+}
+
+median_iqr <- function(d, v) {
+  x <- d[[v]]
+  q <- quantile(x, c(0.25, 0.75))
+  sprintf("%.2f (%.2f–%.2f)", median(x), q[1], q[2])
+}
+
+range_stat <- function(d, v) {
+  x <- d[[v]]
+  sprintf("%.2f–%.2f", min(x), max(x))
+}
+
+count_pct <- function(d, v, category) {
+  x <- as.character(d[[v]])
+  n <- sum(x == category)
+  sprintf("%d (%.1f%%)", n, 100 * n / length(x))
+}
+
+# 4. 构建 Table 2
+rows <- list()
+
+add <- function(label, fun = NULL) {
+  values <- if (is.null(fun)) {
+    rep("", 9)
+  } else {
+    sapply(groups, fun)
+  }
+  rows[[length(rows) + 1]] <<- c(label, values)
+}
+
+add("N", function(d) nrow(d))
+
+add("Mean trip distance (miles)")
+add("Mean (SD)", function(d) mean_sd(d, "mean_trip_miles"))
+add("Median (IQR)", function(d) median_iqr(d, "mean_trip_miles"))
+add("Range", function(d) range_stat(d, "mean_trip_miles"))
+
+add("Age (years)")
+add("Mean (SD)", function(d) mean_sd(d, "age"))
+
+add("Household size")
+add("Mean (SD)", function(d) mean_sd(d, "hh_size"))
+
+add("Employment status, n (%)")
+add("Worker", function(d) count_pct(d, "worker", "worker"))
+add("Non-worker", function(d) count_pct(d, "worker", "not_worker"))
+
+add("Household vehicle ownership, n (%)")
+add("0 vehicles", function(d) count_pct(d, "car_group", "0"))
+add("1 vehicle", function(d) count_pct(d, "car_group", "1"))
+add("2+ vehicles", function(d) count_pct(d, "car_group", "2+"))
+
+# 5. 生成表格
+Table2 <- as.data.frame(
+  do.call(rbind, rows),
+  stringsAsFactors = FALSE
+)
+
+colnames(Table2) <- c(
+  "Variable", paste0("D", 1:8), "Total"
+)
+
+cat(
+  "Table 2: Summary Statistics by Residential Population Density\n\n"
+)
+
+knitr::kable(
+  Table2,
+  caption = "Table 2: Summary Statistics by Residential Population Density",
+  align = c("l", rep("c", 9))
+)
+```
+
+
+
+
+
+
+这张表同时为 M0、M1、M2 和 M3 提供数据背景。前提是四个模型确实使用相同的分析样本；若存在样本差异，则应注明。
+
+## 三、Table 3：按照八档人口密度描述出行距离
+
+这是我认为你的论文中非常重要的一张描述性统计表。
+
+因为 M1 和 M2 都采用八档人口密度变量，所以应保留原始分类结果。
+
+
+
+这里的人数使用你第三阶段已经核验的密度组样本量；其他值需要由 R 实际计算。
+
+Table 3 的作用：
+
+它能够在回归分析之前，直观展示不同密度组的实际平均行程距离。
+
+然后，M1 和 M2 再进一步回答：控制个体与家庭变量后，这些组间差异是否依然存在？
+
+也就是说：
+
+Table 3 展示未经调整的差异，M1、M2 展示控制其他变量后的条件差异。
+
+## 四、Table 4：M0、M1、M2 回归结果表
+
+这一张才是直接按照模型制作的表格。
+
+Table 4: OLS Regression Results for Mean Trip Distance
+
+| Variable               | M0     | M1     | M2     |
+| ---------------------- | ------ | ------ | ------ |
+| Age                    | β (SE) | β (SE) | β (SE) |
+| Age squared            | β (SE) | β (SE) | β (SE) |
+| Employment status      | β (SE) | β (SE) | β (SE) |
+| Household size         | β (SE) | β (SE) | β (SE) |
+| Survey day controls    | Yes    | Yes    | Yes    |
+| Density: 100–499       | —      | β (SE) | β (SE) |
+| Density: 500–999       | —      | β (SE) | β (SE) |
+| Density: 1,000–1,999   | —      | β (SE) | β (SE) |
+| Density: 2,000–3,999   | —      | β (SE) | β (SE) |
+| Density: 4,000–9,999   | —      | β (SE) | β (SE) |
+| Density: 10,000–24,999 | —      | β (SE) | β (SE) |
+| Density: ≥25,000       | —      | β (SE) | β (SE) |
+| Vehicles: 0            | —      | —      | β (SE) |
+| Vehicles: 2+           | —      | —      | β (SE) |
+| Observations           | N      | N      | N      |
+| Adjusted R²            | 待填     | 待填     | 待填     |
+
+表中 β (SE) 表示回归系数及其标准误；所有系数必须从实际模型输出提取。人口密度参考组为 0–99 人/平方英里，车辆数参考组为 1 辆。
+
+M3 可以另做一张较小的交互结果表，重点报告四档密度主效应、汽车拥有量主效应、六个交互系数和交互项联合检验，而不需要重新展示所有基础控制变量。
+
+## 五、如果是约 1,000 词的 Formative，哪些表最值得保留？
+
+对于现在的形成性作业，我建议优先：
+
+1. Table 1：变量名称及定义。
+2. Table 2：全体样本描述性统计。
+3. Table 3：八档人口密度与平均行程距离的关系。
+
+如果需要展示已经完成的回归分析，再增加一个精简的 M0–M3 模型结果表，但没有必要把全部诊断和复杂交互系数都放入篇幅有限的 Formative 正文。
+
+最终建议：不需要为 M0、M1、M2 分别制作三份 Summary Statistics。使用一份总体描述性统计表，加一份八档人口密度分组表，再通过一张回归结果表比较 M0–M2，就能形成清楚而完整的分析结构。
+
+
+
+
+
+
+---
+---
+
+# 
+
+
+
+
+
+
+
+
+
+
+
 
 ## R Markdown
 
@@ -377,7 +660,7 @@ analysis_data %>% count( density_band, car_group ) %>% pivot_wider( names_from =
 # Final check E: Sample selection flow
 # ==================================================
 
-sample_flow <- tibble( step = c( "All respondents", "Adults aged 18+", "Adult travellers", "Complete trip distances", "Valid population density", "Valid core covariates" ), remaining_n = c( nrow(person), nrow(adult), nrow(traveller), nrow(complete_distance), nrow(known_density), nrow(analysis_data) )) %>% mutate( excluded_n = lag( remaining_n, default = first(remaining_n) ) - remaining_n, retained_percent = round( 100 * remaining_n / first(remaining_n), 2 ) )
+sample_flow <- tibble( step = c( "All respondents", "Adults aged 18+", "Adult travelers", "Complete trip distances", "Valid population density", "Valid core covariates" ), remaining_n = c( nrow(person), nrow(adult), nrow(traveller), nrow(complete_distance), nrow(known_density), nrow(analysis_data) )) %>% mutate( excluded_n = lag( remaining_n, default = first(remaining_n) ) - remaining_n, retained_percent = round( 100 * remaining_n / first(remaining_n), 2 ) )
 
 print(sample_flow)
 ```

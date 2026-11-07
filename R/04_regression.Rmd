@@ -1309,6 +1309,8 @@ prediction_results <- bind_cols(
 print(prediction_results)
 ```
 
+
+
 `predict()` 使用已拟合的回归模型进行预测。
 
 `newdata` 指定需要预测哪些变量组合。
@@ -1319,6 +1321,7 @@ print(prediction_results)
 
 - Confidence interval： 估计给定特征下的平均结果有多大不确定性。
 - Prediction interval： 估计一个新个体的实际结果可能落在哪个范围，通常更宽。
+
 
 ### 第三步：绘图
 
