@@ -760,6 +760,7 @@ ggplot(plot_data, aes(x = mean_trip_miles)) +
 )
 
 ```
+
 **Figure 1** shows a strongly right-skewed distribution of mean trip distance, with most observations concentrated at shorter distances. The frequency declines substantially as distance increases. The median, indicated by the dashed line, lies within the lower end of the distribution. This suggests that a relatively small number of long-distance observations may influence the mean.
 
 
@@ -791,6 +792,7 @@ ggplot(plot_data, aes(x = mean_trip_miles)) +
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 2** further illustrates the right-skewed distribution of mean trip distance. The density is highest at relatively short distances and declines rapidly as distance increases, with a long right tail. This indicates substantial variation in travel distances and suggests that the distribution should be considered when specifying and diagnosing subsequent regression models.
 
 
@@ -831,6 +833,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 3** compares trip distance distributions across eight residential population density categories. Higher-density groups, particularly D8, show a greater concentration of observations at shorter distances. Lower-density groups generally display more dispersed distributions. These differences suggest an association between residential population density and trip distance, although other individual and household characteristics may contribute to the observed patterns.
 
 
@@ -869,6 +872,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 4** shows that median trip distance generally decreases as residential population density increases. Lower-density categories have higher medians and wider interquartile ranges, while higher-density categories tend to have shorter trips. However, considerable overlap and numerous outliers remain across groups, indicating substantial individual variation within each density category.
 
 
@@ -910,6 +914,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 5A** shows an uneven distribution of respondents across the eight population density categories. D5 and D6 contain the largest samples, with 1,916 and 1,920 individuals respectively, while D8 has only 265 observations. These differences highlight potential imbalances in statistical precision across density groups, particularly in subsequent interaction analyses.
 
 
@@ -967,6 +972,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 5B** shows that mean trip distance generally declines across higher population density categories, although the pattern is not strictly monotonic. Mean distances exceed medians in every group, reflecting the influence of longer trips. D2 has the highest mean distance, while D8 has the lowest, suggesting an overall negative association between density and trip distance.
 
 
@@ -1005,6 +1011,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 6** illustrates substantial variation in mean trip distance across different ages. Most observations are concentrated at relatively short distances, while longer trips occur throughout much of the age range. No strong linear relationship is immediately apparent. This suggests that age alone explains limited variation in trip distance and warrants further examination using regression models.
 
 
@@ -1043,6 +1050,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 7** illustrates differences in trip distance across household vehicle ownership categories. Respondents from households without vehicles are generally concentrated at shorter distances, whereas those with two or more vehicles display a wider range of travel distances. The groups also differ considerably in sample size, highlighting the importance of examining vehicle ownership in subsequent models.
 
 
@@ -1088,6 +1096,7 @@ ggplot(plot_data, aes(age, log_trip_miles)) +
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 8** compares linear and quadratic trends between age and mean trip distance. Both fitted lines suggest a relatively weak relationship, although the quadratic specification indicates some curvature, particularly at older ages. The substantial dispersion of observations around both curves suggests that age alone has limited explanatory power and supports including additional control variables.
 
 #### Figure 9. Boxplot of Mean Trip Distance by Household Vehicle Ownership
@@ -1123,6 +1132,7 @@ ggplot(
   ) +
   theme(legend.position = "none")
 ```
+
 **Figure 9** shows differences in mean trip distance across vehicle ownership categories. Households without vehicles have the lowest median trip distance, while households with two or more vehicles have the highest. The interquartile ranges also increase with vehicle ownership. However, overlapping distributions and numerous outliers indicate considerable variation within each group.
 
 
@@ -1161,6 +1171,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 10** compares trip distance distributions across three vehicle ownership categories. Households without vehicles show a pronounced concentration at very short distances. Households with one or more vehicles exhibit distributions extending further towards longer trips. Nevertheless, all three distributions remain right-skewed, and substantial overlap suggests that vehicle ownership alone cannot explain travel distance differences.
 
 
@@ -1201,6 +1212,7 @@ ggplot(
     plot.subtitle = element_text(hjust = 0.5)
   )
 ```
+
 **Figure 11** examines trip distance distributions across population density categories within each vehicle ownership group. Trip distances generally appear shorter in higher-density areas, although the patterns vary between ownership categories. Considerable overlap remains, and some density–vehicle combinations contain relatively few observations. These differences motivate further investigation using interaction terms in the regression models.
 
 ---
