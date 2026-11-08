@@ -289,7 +289,7 @@ mean(c(2, 5, -9))
 # Step 7: 检查行程距离
 # ==================================================
 
-trip <- trip %>%
+trip <- trip |>
   mutate(
     miles = parse_double(TRPMILES)
   )
@@ -298,11 +298,11 @@ trip <- trip %>%
 summary(trip$miles)
 
 # 检查原始编码
-trip %>%
+trip |>
   count(TRPMILES, sort = TRUE)
 
 # 专门统计异常编码
-trip %>%
+trip |>
   summarise(
     total_trips = n(),
     missing_value = sum(is.na(miles)),
@@ -320,8 +320,8 @@ trip %>%
   )
 
 # 检查负数的具体编码
-trip %>%
-  filter(miles < 0) %>%
+trip |>
+  filter(miles < 0) |>
   count(TRPMILES)
 ```
 
@@ -395,7 +395,7 @@ anyDuplicated(
 )
 
 # 检查是否有找不到所属个人的行程
-unmatched_trips <- trip %>%
+unmatched_trips <- trip |>
   anti_join(
     person,
     by = c("HOUSEID", "PERSONID")
@@ -404,8 +404,8 @@ unmatched_trips <- trip %>%
 nrow(unmatched_trips)
 
 # 统计每个人有多少条行程
-trip_counts <- trip %>%
-  group_by(HOUSEID, PERSONID) %>%
+trip_counts <- trip |>
+  group_by(HOUSEID, PERSONID) |>
   summarise(
     n_trips = n(),
     .groups = "drop"
@@ -470,8 +470,8 @@ nrow(trip_counts)
 # Step 9: 构建个人平均行程距离
 # ==================================================
 
-trip_summary <- trip %>%
-  group_by(HOUSEID, PERSONID) %>%
+trip_summary <- trip |>
+  group_by(HOUSEID, PERSONID) |>
   summarise(
     # 这个人有多少次行程
     n_trips = n(),
@@ -495,7 +495,7 @@ trip_summary <- trip %>%
 glimpse(trip_summary)
 
 # 检查结果
-trip_summary %>%
+trip_summary |>
   summarise(
     n_persons = n(),
     invalid_persons = sum(!all_distances_valid),
@@ -558,7 +558,7 @@ trip_summary %>%
 # Step 10: 合并个人与行程汇总数据
 # ==================================================
 
-person_day <- person %>%
+person_day <- person |>
   left_join(
     trip_summary,
     by = c("HOUSEID", "PERSONID"),
@@ -574,12 +574,12 @@ stopifnot(
 )
 
 # 查看部分记录
-person_day %>%
+person_day |>
   select(
     HOUSEID, PERSONID,
     R_AGE, HTPPOPDN,
     n_trips, mean_trip_miles
-  ) %>%
+  ) |>
   head(10)
 ```
 
@@ -614,7 +614,7 @@ person_day %>%
 # Step 11: 检查行程数量一致性
 # ==================================================
 
-person_day <- person_day %>%
+person_day <- person_day |>
   mutate(
     reported_trips = parse_integer(CNTTDTR),
 
@@ -624,7 +624,7 @@ person_day <- person_day %>%
   )
 
 # 不一致的受访者
-mismatch <- person_day %>%
+mismatch <- person_day |>
   filter(
     is.na(reported_trips) |
     recorded_trips != reported_trips
@@ -634,7 +634,7 @@ mismatch <- person_day %>%
 nrow(mismatch)
 
 # 检查无行程人数
-person_day %>%
+person_day |>
   summarise(
     all_persons = n(),
     with_trips = sum(recorded_trips > 0),
@@ -677,7 +677,7 @@ NHTS 包含 5 岁及以上的家庭成员，而我们的研究问题限定为成
 # Step 12: 筛选成年人
 # ==================================================
 
-person_day <- person_day %>%
+person_day <- person_day |>
   mutate(
     age = parse_double(R_AGE)
   )
@@ -689,7 +689,7 @@ summary(person_day$age)
 sum(is.na(person_day$age))
 
 # 筛选18岁及以上
-adult <- person_day %>%
+adult <- person_day |>
   filter(age >= 18)
 
 # 查看剩余人数
@@ -720,13 +720,13 @@ nrow(adult)
 # ==================================================
 
 # 先检查有行程和无行程的人数
-adult %>%
+adult |>
   count(
     has_trip = recorded_trips > 0
   )
 
 # 只保留有行程记录的人
-traveller <- adult %>%
+traveller <- adult |>
   filter(recorded_trips > 0)
 
 nrow(traveller)
@@ -766,11 +766,11 @@ Adult travellers who recorded at least one trip on their assigned travel day.
 # ==================================================
 
 # 先查看有多少人存在无效距离
-traveller %>%
+traveller |>
   count(all_distances_valid)
 
 # 保留全部行程距离有效的人
-complete_distance <- traveller %>%
+complete_distance <- traveller |>
   filter(all_distances_valid)
 
 nrow(complete_distance)
@@ -828,7 +828,7 @@ sum(
 # ==================================================
 
 # 查看原始人口密度代码分布
-complete_distance %>%
+complete_distance |>
   count(HTPPOPDN, sort = TRUE)
 
 # 构建八个有效类别代码
@@ -839,7 +839,7 @@ valid_density_codes <- sprintf(
 valid_density_codes
 
 # 筛选有效人口密度
-known_density <- complete_distance %>%
+known_density <- complete_distance |>
   filter(
     HTPPOPDN %in% valid_density_codes
   )
@@ -899,7 +899,7 @@ sprintf("%02d", 1:8)
 # Step 16: 检查和清洗基础控制变量
 # ==================================================
 
-known_density <- known_density %>%
+known_density <- known_density |>
   mutate(
     hh_size = parse_double(HHSIZE),
     vehicles = parse_double(HHVEHCNT),
@@ -907,7 +907,7 @@ known_density <- known_density %>%
   )
 
 # 工作状态分布
-known_density %>%
+known_density |>
   count(WORKER)
 
 # 家庭人数
@@ -917,25 +917,25 @@ summary(known_density$hh_size)
 summary(known_density$vehicles)
 
 # 调查日星期
-known_density %>%
+known_density |>
   count(TRAVDAY)
 
 # 个人调查权重
 summary(known_density$person_weight)
 
 # 地区控制变量检查
-known_density %>%
+known_density |>
   count(CENSUS_R)
 
 # 调查年月检查
-known_density %>%
+known_density |>
   count(TDAYDATE)
 ```
 
 ### 3. 正式筛选
 
 ```{r}
-analysis_data <- known_density %>%
+analysis_data <- known_density |>
   filter(
     WORKER %in% c("01", "02"),
     hh_size > 0,
@@ -991,7 +991,7 @@ nrow(analysis_data)
 # Step 17: 变量重编码
 # ==================================================
 
-analysis_data <- analysis_data %>%
+analysis_data <- analysis_data |>
   mutate(
 
     # 1. 核心自变量：Tract人口密度
@@ -1157,8 +1157,8 @@ quantile(
 # 最终核查 C：人口密度
 # ==================================================
 
-analysis_data %>%
-  group_by(density_band) %>%
+analysis_data |>
+  group_by(density_band) |>
   summarise(
     persons = n(),
     households = n_distinct(HOUSEID),
@@ -1193,11 +1193,11 @@ analysis_data %>%
 # 最终核查 D：交互分析可行性
 # ==================================================
 
-analysis_data %>%
+analysis_data |>
   count(
     density_band,
     car_group
-  ) %>%
+  ) |>
   pivot_wider(
     names_from = car_group,
     values_from = n,
@@ -1242,7 +1242,7 @@ sample_flow <- tibble(
     nrow(known_density),
     nrow(analysis_data)
   )
-) %>%
+) |>
   mutate(
     excluded_n = lag(
       remaining_n,

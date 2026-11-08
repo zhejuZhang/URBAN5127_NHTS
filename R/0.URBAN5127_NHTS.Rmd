@@ -1,687 +1,1225 @@
 ---
-title: "Residential Population Density and Daily Travel Distance in the United States
-  A Cross-Sectional Regression Analysis of Nonlinearity and Heterogeneity"
+title: "Residential Population Density and Daily Travel Distance in the United States A Cross-Sectional Regression Analysis of Nonlinearity and Heterogeneity"
+author: "3281675Z"
+date: "`r Sys.Date()`"
 output: html_document
-date: "2026-10-15"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-install.packages(c("tidyverse","dplyr", "gtsummary", "gt"))
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r, }
+# install.packages("tidyverse")
+# install.packages("scales")
+# install.packages("ggplot2")
 library(tidyverse)
 library(dplyr)
-library(gtsummary)
-library(gt)
+library(tidyr)
+library(tibble)
+library(knitr)
+library(ggplot2)
+library(scales)
 getwd()
 ```
 
-# inroduction
+Residential Population Density and Mean Trip Distance among Adult Travellers in the United States: Evidence from the 2022 NextGen NHTS
 
-first pragrafers
+# Inroduction
+
+The relationship between the built environment and travel behaviour has long been an important topic in urban and transport planning. Previous research suggests that characteristics of the built environment, including population density, land-use diversity and urban design, are associated with how people travel (Cervero and Kockelman, 1997). However, the strength of these relationships remains debated. Ewing and Cervero (2010) found that population density was only weakly associated with travel behaviour after accounting for other built-environment characteristics. Similarly, Stevens (2017) concluded that compact development was associated with reduced driving, but the estimated effect was relatively small. These findings suggest that residential density alone may not fully explain differences in travel behaviour, making it important to consider individual and household characteristics.
 
 In this paper, we will utilise data from the 2022 NextGen National Household Travel Survey (NHTS) to examine the relationship between residential population density and mean trip distance among adult travelers in the United States. We will test whether this relationship remains after controlling for individual and household characteristics, such as age, employment status, household size, and survey day. We will also investigate whether the relationship varies according to household vehicle ownership.
+
+
 
 ---
 
 # Data
+The following variables are selected from the dataset for the analysis and are defined in Table 1.
 
-We first select the variables we will use in the analysis. The following variables are used:
 
-Table 1. Variable Names and Definitions
+```{r}
+# variable names
+variable_names <- c(
+  "Mean trip distance",
+  "Residential population density",
+  "Aggregated population density",
+  "Age",
+  "Age squared",
+  "Employment status",
+  "Household size",
+  "Survey day",
+  "Household vehicle ownership",
+  "Population density × Vehicle ownership"
+)
+# field names
+Field_Name <- c(
+  "mean_trip_miles",
+  "density_band",
+  "density_group",
+  "age",
+  "age_squared",
+  "worker",
+  "hh_size",
+  "travday",
+  "car_group",
+  "density_car_interaction"
+)
+# variable descriptions
+variable_descriptions <- c(
+  "Mean distance per recorded trip for each adult traveller on their assigned travel day, measured in miles.",
+  "Census tract population density at the respondent's residential location, classified into eight categories (HTPPOPDN).",
+  "Residential population density reclassified into four categories for the interaction model (M3).",
+  "Age of the respondent in years.",
+  "Squared centred age term used to account for potential nonlinear associations between age and mean trip distance.",
+  "Employment status of the respondent, classified as worker or non-worker.",
+  "Number of people living in the respondent's household.",
+  "Day of the week on which the respondent's travel activities were recorded.",
+  "Number of vehicles available to the household, classified into zero, one, and two or more vehicles.",
+  "Interaction between aggregated residential population density and household vehicle ownership, used to examine whether their associations with mean trip distance vary across groups."
+)
+# create a data frame for the table -- Table 1
+Table1 <- data.frame(
+  Variable = variable_names,
+  Field_Name = Field_Name,
+  Description = variable_descriptions,
+  stringsAsFactors = FALSE
+)
 
-| Variable                               | Description                                                                                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mean trip distance                     | Mean distance per recorded trip for each adult traveller on their assigned travel day, measured in miles.                                                                             |
-| Residential population density         | Census tract population density at the respondent's residential location, classified into eight categories (HTPPOPDN).                                                                |
-| Aggregated population density          | Residential population density reclassified into four categories for the interaction model (M3).                                                                                      |
-| Age                                    | Age of the respondent in years.                                                                                                                                                       |
-| Age squared                            | Squared centred age term used to account for potential nonlinear associations between age and mean trip distance.                                                                     |
-| Employment status                      | Employment status of the respondent, classified as worker or non-worker.                                                                                                              |
-| Household size                         | Number of people living in the respondent's household.                                                                                                                                |
-| Survey day                             | Day of the week on which the respondent's travel activities were recorded.                                                                                                            |
-| Household vehicle ownership            | Number of vehicles available to the household, classified into zero, one, and two or more vehicles.                                                                                   |
-| Population density × Vehicle ownership | Interaction between aggregated residential population density and household vehicle ownership, used to examine whether their associations with mean trip distance vary across groups. |
+knitr::kable(
+  Table1,
+  caption = "Table 1. Variable Names and Definitions",
+  align = c("l","l","l"),
+  row.names = FALSE
+)
+```
 
 Note: Mean trip distance is the dependent variable. Residential population density is the main independent variable. The remaining demographic and household characteristics are included as controls or extensions across M0–M3. The interaction term is constructed within M3 rather than being an original NHTS variable.
 
+---
+
+# Data Cleaning
+
+The data were obtained from the National Household Travel Survey (NHTS), comprising 16,997 person records and 31,074 trip records. Trip records were grouped by household and individual identifiers to calculate the mean trip distance for each person. The resulting summaries were then merged with the person-level dataset. Checks found no duplicate identifiers, unmatched trip records, or inconsistencies between reported and recorded trip counts.
+
+We filter the data to include only relevant observations and to exclude potentially erroneous values. The data are filtered based on the following set of rules:
+
+1. Include only adults aged 18 years and above, leaving 14,423 observations.
+2. Include only individuals with at least one recorded trip, reducing the sample to 9,100 adult travellers.
+3. Exclude individuals with missing, negative, or non-finite trip distances, leaving 9,088 observations with complete trip distance records.
+4. Include only observations with valid residential population density codes (HTPPOPDN: 01–08), leaving 9,052 observations.
+5. Include only observations with valid employment status codes (WORKER: 01 or 02).
+6. Exclude observations with zero or negative household size.
+7. Exclude observations with negative or missing household vehicle ownership values.
+8. Include only observations with valid survey day codes (TRAVDAY: 01–07).
+9. Exclude observations with missing, non-finite, or non-positive person-level survey weights (WTPERFIN).
+
+The final sample consists of **9,052 adult travellers**. No additional observations were excluded after applying the restrictions on the core control variables and survey weights. This dataset is used for the subsequent descriptive statistics and regression analysis.
 
 
-We filter the data to include relevant observations and exclude invalid or incomplete records. We also construct the variables required for the analysis. The original person-level dataset from the 2022 NextGen National Household Travel Survey (NHTS) contains 16,997 respondents. Trip-level records are aggregated to the individual level using household and person identifiers (HOUSEID and PERSONID). Mean trip distance is calculated as the average distance of all valid recorded trips for each respondent. The data are filtered according to the following rules:
+### Code of Data Cleaning
 
-1. Include only adults aged 18 years or older.
-2. Include only respondents who recorded at least one trip on their assigned travel day.
-3. Exclude respondents with any invalid or missing trip distances, including negative values used to indicate missing information. Valid zero-distance records are retained.
-4. Include only respondents with valid residential population density classifications (HTPPOPDN), corresponding to the eight density categories.
-5. Exclude observations with invalid values for the core control variables, including employment status, household size, household vehicle ownership, and survey day, or invalid personal survey weights.
-
+##### 1. Read the raw data files, identify the field types
 ```{r}
-# 确认文件存在
-stopifnot(
-  file.exists("../data/raw/perv2pub.csv"),
-  file.exists("../data/raw/tripv2pub.csv")
-)
-
-# 读取个人数据
+# Read personal data
 person <- read_csv(
   "../data/raw/perv2pub.csv",
   col_types = cols(.default = col_character()),
   show_col_types = FALSE
 )
 
-# 读取行程数据
+# Read trip data
 trip <- read_csv(
   "../data/raw/tripv2pub.csv",
   col_types = cols(.default = col_character()),
   show_col_types = FALSE
 )
-
-# 查看数据规模
-dim(person)
-dim(trip)
-
-# 查看字段结构
-glimpse(person)
-glimpse(trip)
-
-# 检查核心变量是否存在
-required_person <- c(
-  "HOUSEID", "PERSONID", "R_AGE",
-  "HTPPOPDN", "CNTTDTR",
-  "WORKER", "HHSIZE", "HHVEHCNT",
-  "TRAVDAY", "TDAYDATE", "WTPERFIN"
+# Preview the first few rows of the person and trip datasets
+table_raw_data <- data.frame(
+  Dataset = c("person", "trip"),
+  Rows = c(nrow(person), nrow(trip)),
+  Columns = c(ncol(person), ncol(trip))
 )
-
-required_trip <- c(
-  "HOUSEID", "PERSONID",
-  "TRIPID", "TRPMILES"
+knitr::kable(
+  table_raw_data,
+  caption = "Raw Data Overview",
+  align = c("l","c","c"),
+  row.names = FALSE
 )
-
-stopifnot(
-  all(required_person %in% names(person)),
-  all(required_trip %in% names(trip))
-)
-
-dim(person)
-
-dim(trip)
-
-
 ```
 
 
-The final analytical sample consists of **9,052 adult travelers from 6,113 households**, compared with the initial 16,997 respondents. This reduction mainly reflects the exclusion of underage respondents and adults who recorded no trips. Since the dependent variable measures mean distance per recorded trip, respondents without recorded trips cannot be included. In Table 2, we present the descriptive statistics for the final analytical sample.
+##### 2. Check for missing, negative, and zero values in trip distances  
+```{r}
+# Check for missing, negative, and zero values in trip distances
+trip <- trip |>
+  mutate(
+    miles = parse_double(TRPMILES)
+  )
+summary(trip$miles)
+```
+
+```{r}
+# Create a summary table for trip distances
+table_summary_trip_distances <- trip |>
+  summarise(
+    total_trips = n(),
+    missing_value = sum(is.na(miles)),
+    negative_distance = sum(miles < 0, na.rm = TRUE),
+    zero_distance = sum(miles == 0, na.rm = TRUE),
+    valid_distance = sum(is.finite(miles) & miles >= 0)
+  )
+
+knitr::kable(
+  table_summary_trip_distances,
+  caption = "Summary of Trip Distances",
+  align = c("l","c","c","c","c","c"),
+  row.names = FALSE
+)
+```
+
+#### 3. Group Trip by Household and Person
+
+##### 3.1. Check for duplicates and unmatched records
+```{r}
+# Check for duplicate person keys
+duplicate_person <- sum(
+  duplicated(person[c("HOUSEID", "PERSONID")])
+)
+
+# Check for duplicate trip keys
+duplicate_trip <- sum(
+  duplicated(trip[c("HOUSEID", "PERSONID", "TRIPID")])
+)
+
+# Check for unmatched trip records
+unmatched_trips <- trip |>
+  anti_join(person, by = c("HOUSEID", "PERSONID"))
+
+unmatched_count <- nrow(unmatched_trips)
+
+# Create data quality check table
+Table_check <- data.frame(
+  Check = c(
+    "Duplicate person keys",
+    "Duplicate trip keys",
+    "Unmatched trip records"
+  ),
+  Result = c(
+    duplicate_person,
+    duplicate_trip,
+    unmatched_count
+  )
+)
+
+# Display table
+knitr::kable(
+  Table_check,
+  caption = "Data Quality Checks",
+  align = c("l", "c"),
+  row.names = FALSE
+)
+```
+
+##### 3.2. Count the number of trips for each individual
+```{r}
+# Count the number of trips for each individual
+trip_counts <- trip |>
+  group_by(HOUSEID, PERSONID) |>
+  summarise(
+    n_trips = n(),
+    .groups = "drop"
+  )
+
+# Display the number of trips for each individual
+cat("Number of Individuals with Trip Records:", nrow(trip_counts), "\n")
+```
+
+
+##### 3.3. Summarise trip distances for each individual
+```{r}
+# Summarise trip distances for each individual
+trip_summary <- trip |>
+  group_by(HOUSEID, PERSONID) |>
+  summarise(
+    n_trips = n(),
+    all_distances_valid = all(
+      is.finite(miles) & miles >= 0
+    ),
+   mean_trip_miles = if (all_distances_valid) {
+      mean(miles)
+    } else {
+      NA_real_
+    },
+    .groups = "drop"
+  )
+
+  glimpse(trip_summary)
+```
+
+```{r}
+# Summarise trip distances for each individual
+table_trip_sumary <- trip_summary |>
+  summarise(
+    n_persons = n(),
+    invalid_persons = sum(!all_distances_valid),
+    valid_persons = sum(all_distances_valid),
+    zero_mean = sum(
+      mean_trip_miles == 0,
+      na.rm = TRUE
+    )
+  )
+
+knitr::kable(
+  table_trip_sumary,
+  caption = "Summary of Trip Distances by Individual",
+  align = c("l", "c", "c", "c", "c"),
+  row.names = FALSE
+)
+```
+
+##### 4. Associate trip summaries with person-level data
+```{r}
+# Associate trip summaries with person-level data
+person_day <- person |>
+  left_join(
+    trip_summary,
+    by = c("HOUSEID", "PERSONID"),
+    relationship = "one-to-one"
+  )
+
+# Check the number of rows in person_day and person
+if (nrow(person_day) == nrow(person)) {
+  cat("The number of rows in person_day",nrow(person_day),"matches the number of rows in person",nrow(person),".\n")
+} else {
+  cat("Warning: The number of rows in person_day does not match the number of rows in person.\n")
+}
+```
+
+
+```{r}
+# Display the first 10 rows of the person_day dataset with selected variables
+
+table_person_day <- person_day |>
+  select(
+    HOUSEID, PERSONID,
+    R_AGE, HTPPOPDN,
+    n_trips, mean_trip_miles
+  ) |>
+  head(10)
+
+knitr::kable(
+  table_person_day,
+  caption = "First 10 Rows of Person-Day Dataset with Selected Variables",
+  align = c("l", "l", "c", "c", "c", "c"),
+  row.names = FALSE
+)
+```
 
 
 
 ```{r}
-# 1. 读取数据
-Data <- readRDS("../data/processed/analysis_data.rds")
+# Check for mismatches between reported and recorded trip counts
+person_day <- person_day |>
+  mutate(
+    reported_trips = parse_integer(CNTTDTR),
+    recorded_trips = coalesce(
+      n_trips, 0L
+    )
+  )
+# Check for mismatches between reported and recorded trip counts
+mismatch <- person_day |>
+  filter(
+    is.na(reported_trips) |
+    recorded_trips != reported_trips
+  )
 
-# 2. 按八档人口密度分组
-groups <- lapply(sprintf("%02d", 1:8), function(x) {
-  Data[as.character(Data$density_band) == x, ]
-})
+# Summarise the number of individuals with and without recorded trips
+table_person_day <- person_day |>
+  summarise(
+    total_persons = n(),
+    Mismatch = nrow(mismatch),
+    with_trips = sum(recorded_trips > 0),
+    without_trips = sum(recorded_trips == 0),
+  )
 
-names(groups) <- paste0("D", 1:8)
-groups$Total <- Data
+knitr::kable(
+  table_person_day,
+  caption = "Summary of Individuals with and without Recorded Trips",
+  align = c("c", "c", "c", "c"),
+  row.names = FALSE
+)
+```
 
-# 3. 定义统计函数
-mean_sd <- function(d, v) {
-  x <- d[[v]]
-  sprintf("%.2f (%.2f)", mean(x), sd(x))
-}
+##### 5. Filter for adults aged 18 and above
+```{r}
+person_day <- person_day |>
+  mutate(
+    age = parse_double(R_AGE)
+  )
 
-median_iqr <- function(d, v) {
-  x <- d[[v]]
-  q <- quantile(x, c(0.25, 0.75))
-  sprintf("%.2f (%.2f–%.2f)", median(x), q[1], q[2])
-}
+cat("Preview summary of the 'age' variable:\n\n")
+summary(person_day$age)
+```
 
-range_stat <- function(d, v) {
-  x <- d[[v]]
-  sprintf("%.2f–%.2f", min(x), max(x))
-}
 
-count_pct <- function(d, v, category) {
-  x <- as.character(d[[v]])
-  n <- sum(x == category)
-  sprintf("%d (%.1f%%)", n, 100 * n / length(x))
-}
+```{r}
+# check the data famework
+table_adult <- person_day |>
+  summarise(
+    total_adults = n(),
+    missing_age = sum(is.na(age)),
+    under_18 = sum(age < 18, na.rm = TRUE),
+    valid_adults = sum(age >= 18, na.rm = TRUE)
+  )
 
-# 4. 构建 Table 2
-rows <- list()
-
-add <- function(label, fun = NULL) {
-  values <- if (is.null(fun)) {
-    rep("", 9)
-  } else {
-    sapply(groups, fun)
-  }
-  rows[[length(rows) + 1]] <<- c(label, values)
-}
-
-add("N", function(d) nrow(d))
-
-add("Mean trip distance (miles)")
-add("Mean (SD)", function(d) mean_sd(d, "mean_trip_miles"))
-add("Median (IQR)", function(d) median_iqr(d, "mean_trip_miles"))
-add("Range", function(d) range_stat(d, "mean_trip_miles"))
-
-add("Age (years)")
-add("Mean (SD)", function(d) mean_sd(d, "age"))
-
-add("Household size")
-add("Mean (SD)", function(d) mean_sd(d, "hh_size"))
-
-add("Employment status, n (%)")
-add("Worker", function(d) count_pct(d, "worker", "worker"))
-add("Non-worker", function(d) count_pct(d, "worker", "not_worker"))
-
-add("Household vehicle ownership, n (%)")
-add("0 vehicles", function(d) count_pct(d, "car_group", "0"))
-add("1 vehicle", function(d) count_pct(d, "car_group", "1"))
-add("2+ vehicles", function(d) count_pct(d, "car_group", "2+"))
-
-# 5. 生成表格
-Table2 <- as.data.frame(
-  do.call(rbind, rows),
-  stringsAsFactors = FALSE
+knitr::kable(
+  table_adult,
+  caption = "Summary of Adult Individuals (Age 18 and Above)",
+  align = c("c", "c", "c", "c", "c"),
+  row.names = FALSE
 )
 
-colnames(Table2) <- c(
-  "Variable", paste0("D", 1:8), "Total"
-)
+adult <- person_day |>
+  filter(age >= 18)
+```
 
-cat(
-  "Table 2: Summary Statistics by Residential Population Density\n\n"
+##### 6. Filter for adults with at least one recorded trip
+```{r}
+adult |>
+  count(
+    has_trip = recorded_trips > 0
+  )
+```
+
+
+```{r}
+traveller <- adult |>
+  filter(recorded_trips > 0)
+
+cat(nrow(traveller),"adult travellers with at least one recorded trip.\n")
+
+```
+
+
+##### 7. Check for invalid trip distances among adult travellers
+```{r}
+traveller |>
+  count(all_distances_valid)
+```
+
+
+```{r}
+complete_distance <- traveller |>
+  filter(all_distances_valid)
+
+cat(nrow(complete_distance),"adult travellers with complete trip distance records.\n")
+```
+
+##### 8. Filter for valid residential population density codes
+```{r}
+# 查看原始人口密度代码分布
+complete_distance |>
+  count(HTPPOPDN, sort = TRUE)
+```
+
+```{r}
+valid_density_codes <- sprintf(
+  "%02d", 1:8
+)
+cat("Valid residential population density codes:", paste(valid_density_codes, collapse = ", "), "\n")
+```
+
+
+```{r}
+known_density <- complete_distance |>
+  filter(
+    HTPPOPDN %in% valid_density_codes
+  )
+cat(nrow(known_density),"adult travellers with valid residential population density codes.\n")
+```
+
+
+##### 9. Check for invalid values in core control variables
+```{r}
+known_density <- known_density |>
+  mutate(
+    hh_size = parse_double(HHSIZE),
+    vehicles = parse_double(HHVEHCNT),
+    person_weight = parse_double(WTPERFIN)
+  )
+
+analysis_data <- known_density |>
+  filter(
+    WORKER %in% c("01", "02"),
+    hh_size > 0,
+    vehicles >= 0,
+    TRAVDAY %in% sprintf("%02d", 1:7),
+    is.finite(person_weight),
+    person_weight > 0
+  )
+
+cat(nrow(analysis_data),"adult travellers with valid core control variables.\n")
+```
+
+```{r}
+# Summarise the sample selection and data integration process
+sample_flow <- tibble(
+  Sample = c(
+    "Raw person records",
+    "Raw trip records",
+    "Merged person-level dataset",
+    "Adults aged 18 or older",
+    "Adults with at least one recorded trip",
+    "Adults with complete trip distance records",
+    "Adults with valid population density codes",
+    "Final analysis sample"
+  ),
+  Unit = c(
+    "Person", "Trip", "Person", "Person",
+    "Person", "Person", "Person", "Person"
+  ),
+  Observations = c(
+    nrow(person),
+    nrow(trip),
+    nrow(person_day),
+    nrow(adult),
+    nrow(traveller),
+    nrow(complete_distance),
+    nrow(known_density),
+    nrow(analysis_data)
+  )
 )
 
 knitr::kable(
-  Table2,
-  caption = "Table 2: Summary Statistics by Residential Population Density",
-  align = c("l", rep("c", 9))
+  sample_flow,
+  caption = "Sample Selection and Data Integration",
+  align = c("l", "c", "r"),
+  format.args = list(big.mark = ","),
+  row.names = FALSE
 )
 ```
 
-
-
-
-
-
-这张表同时为 M0、M1、M2 和 M3 提供数据背景。前提是四个模型确实使用相同的分析样本；若存在样本差异，则应注明。
-
-## 三、Table 3：按照八档人口密度描述出行距离
-
-这是我认为你的论文中非常重要的一张描述性统计表。
-
-因为 M1 和 M2 都采用八档人口密度变量，所以应保留原始分类结果。
-
-
-
-这里的人数使用你第三阶段已经核验的密度组样本量；其他值需要由 R 实际计算。
-
-Table 3 的作用：
-
-它能够在回归分析之前，直观展示不同密度组的实际平均行程距离。
-
-然后，M1 和 M2 再进一步回答：控制个体与家庭变量后，这些组间差异是否依然存在？
-
-也就是说：
-
-Table 3 展示未经调整的差异，M1、M2 展示控制其他变量后的条件差异。
-
-## 四、Table 4：M0、M1、M2 回归结果表
-
-这一张才是直接按照模型制作的表格。
-
-Table 4: OLS Regression Results for Mean Trip Distance
-
-| Variable               | M0     | M1     | M2     |
-| ---------------------- | ------ | ------ | ------ |
-| Age                    | β (SE) | β (SE) | β (SE) |
-| Age squared            | β (SE) | β (SE) | β (SE) |
-| Employment status      | β (SE) | β (SE) | β (SE) |
-| Household size         | β (SE) | β (SE) | β (SE) |
-| Survey day controls    | Yes    | Yes    | Yes    |
-| Density: 100–499       | —      | β (SE) | β (SE) |
-| Density: 500–999       | —      | β (SE) | β (SE) |
-| Density: 1,000–1,999   | —      | β (SE) | β (SE) |
-| Density: 2,000–3,999   | —      | β (SE) | β (SE) |
-| Density: 4,000–9,999   | —      | β (SE) | β (SE) |
-| Density: 10,000–24,999 | —      | β (SE) | β (SE) |
-| Density: ≥25,000       | —      | β (SE) | β (SE) |
-| Vehicles: 0            | —      | —      | β (SE) |
-| Vehicles: 2+           | —      | —      | β (SE) |
-| Observations           | N      | N      | N      |
-| Adjusted R²            | 待填     | 待填     | 待填     |
-
-表中 β (SE) 表示回归系数及其标准误；所有系数必须从实际模型输出提取。人口密度参考组为 0–99 人/平方英里，车辆数参考组为 1 辆。
-
-M3 可以另做一张较小的交互结果表，重点报告四档密度主效应、汽车拥有量主效应、六个交互系数和交互项联合检验，而不需要重新展示所有基础控制变量。
-
-## 五、如果是约 1,000 词的 Formative，哪些表最值得保留？
-
-对于现在的形成性作业，我建议优先：
-
-1. Table 1：变量名称及定义。
-2. Table 2：全体样本描述性统计。
-3. Table 3：八档人口密度与平均行程距离的关系。
-
-如果需要展示已经完成的回归分析，再增加一个精简的 M0–M3 模型结果表，但没有必要把全部诊断和复杂交互系数都放入篇幅有限的 Formative 正文。
-
-最终建议：不需要为 M0、M1、M2 分别制作三份 Summary Statistics。使用一份总体描述性统计表，加一份八档人口密度分组表，再通过一张回归结果表比较 M0–M2，就能形成清楚而完整的分析结构。
-
-
-
-
+```{r}
+saveRDS(analysis_data, file = "../data/processed/analysis_data.rds")
+```
 
 
 ---
+
+# Summary Statistics
+```{r}
+table2_data <- analysis_data |>
+  mutate(
+    density_group = factor(
+      paste0("D", as.integer(HTPPOPDN)),
+      levels = paste0("D", 1:8)
+    )
+  )
+
+# 2. Define formatting functions
+fmt_n <- function(x) {
+  format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
+}
+
+fmt_mean_sd <- function(x) {
+  sprintf(
+    "%.2f (%.2f)",
+    mean(x, na.rm = TRUE),
+    sd(x, na.rm = TRUE)
+  )
+}
+fmt_median_iqr <- function(x) {
+  sprintf(
+    "%.2f (%.2f)",
+    median(x, na.rm = TRUE),
+    IQR(x, na.rm = TRUE)
+  )
+}
+
+fmt_range <- function(x) {
+  sprintf(
+    "%.2f–%.2f",
+    min(x, na.rm = TRUE),
+    max(x, na.rm = TRUE)
+  )
+}
+
+fmt_count_pct <- function(count, total) {
+  sprintf(
+    "%s (%.1f%%)",
+    fmt_n(count),
+    100 * count / total
+  )
+}
+
+make_summary <- function(data, group_name) {
+
+  N <- nrow(data)
+
+  tibble(
+    Density = group_name,
+    row_id = 1:16,
+    Variable = c(
+      "N",
+      "Mean trip distance (miles)",
+      "Mean (SD)",
+      "Median (IQR)",
+      "Range",
+      "Age (years)",
+      "Mean (SD)",
+      "Household size",
+      "Mean (SD)",
+      "Employment status, n (%)",
+      "Worker",
+      "Non-worker",
+      "Vehicle ownership, n (%)",
+      "0 vehicles",
+      "1 vehicle",
+      "2+ vehicles"
+    ),
+    Value = c(
+      # Sample size
+      fmt_n(N),
+
+      # Mean trip distance
+      "",
+      fmt_mean_sd(data$mean_trip_miles),
+      fmt_median_iqr(data$mean_trip_miles),
+      fmt_range(data$mean_trip_miles),
+
+      # Age
+      "",
+      fmt_mean_sd(data$age),
+
+      # Household size
+      "",
+      fmt_mean_sd(data$hh_size),
+
+      # Employment status
+      "",
+      fmt_count_pct(sum(data$WORKER == "01"), N),
+      fmt_count_pct(sum(data$WORKER == "02"), N),
+
+      # Vehicle ownership
+      "",
+      fmt_count_pct(sum(data$vehicles == 0), N),
+      fmt_count_pct(sum(data$vehicles == 1), N),
+      fmt_count_pct(sum(data$vehicles >= 2), N)
+    )
+  )
+}
+
+# 4. Calculate statistics for D1–D8 and Total
+table2_long <- bind_rows(
+  lapply(
+    paste0("D", 1:8),
+    function(g) {
+      make_summary(
+        filter(table2_data, density_group == g),
+        g
+      )
+    }
+  ),
+  make_summary(table2_data, "Total")
+)
+
+# 5. Convert to wide format
+table2 <- table2_long |>
+  pivot_wider(
+    id_cols = c(row_id, Variable),
+    names_from = Density,
+    values_from = Value
+  ) |>
+  arrange(row_id) |>
+  select(
+    Variable, D1, D2, D3, D4,
+    D5, D6, D7, D8, Total
+  )
+
+# 6. Format section headings for HTML output
+section_rows <- c(
+  "Mean trip distance (miles)",
+  "Age (years)",
+  "Household size",
+  "Employment status, n (%)",
+  "Vehicle ownership, n (%)"
+)
+
+table2 <- table2 |>
+  mutate(
+    Variable = if_else(
+      Variable %in% section_rows,
+      paste0("<strong>", Variable, "</strong>"),
+      Variable
+    )
+  )
+
+# 7. Display Table 2
+knitr::kable(
+  table2,
+  caption = "Table 2: Summary Statistics by Residential Population Density",
+  align = c("l", rep("c", 9)),
+  escape = FALSE,
+  row.names = FALSE
+)
+```
+
 ---
 
-# 
+# Data visualization
 
+```{r}
+analysis_data <- read_rds("../data/processed/analysis_data.rds")
 
+plot_data <- analysis_data |>
+  mutate(
+    density_band = factor(
+      HTPPOPDN,
+      levels = sprintf("%02d", 1:8),
+      labels = paste0("D", 1:8)
+    ),
 
+    car_group = factor(
+      case_when(
+        vehicles == 0 ~ "0 vehicles",
+        vehicles == 1 ~ "1 vehicle",
+        vehicles >= 2 ~ "2+ vehicles"
+      ),
+      levels = c(
+        "0 vehicles",
+        "1 vehicle",
+        "2+ vehicles"
+      )
+    ),
 
+    log_trip_miles = log1p(mean_trip_miles)
+  )
 
+plot_data |>
+  count(density_band)
 
+p95 <- quantile(
+  plot_data$mean_trip_miles, 0.95, na.rm = TRUE
+)
 
+p99 <- quantile(
+  plot_data$mean_trip_miles, 0.99, na.rm = TRUE
+)
 
+mile_breaks <- c(
+  0, 1, 2, 5, 10, 25, 50,
+  100, 250, 500, 1000, 2500
+)
 
-
-
-
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+mile_y_axis <- function() {
+  scale_y_continuous(
+    breaks = log1p(mile_breaks),
+    labels = scales::comma(mile_breaks)
+  )
+}
 ```
 
-## Including Plots
+#### Figure 1. Histogram of Mean Trip Distance
 
-You can also embed plots, for example:
+```{r}
+ggplot(plot_data, aes(x = mean_trip_miles)) +
+  geom_histogram(
+    binwidth = 2,
+    boundary = 0,
+    colour = "white",
+    fill = "steelblue",
+    alpha = 0.4,
+  ) +
+  geom_vline(
+    xintercept = median(plot_data$mean_trip_miles),
+    colour = "red",
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  coord_cartesian(
+    xlim = c(0, p95)
+  ) +
+  labs(
+    title = "Distribution of Mean Trip Distance",
+    subtitle = "Displayed up to the 95th percentile",
+    x = "Mean trip distance (miles)",
+    y = "Number of adult travellers",
+    caption = paste0(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n",
+      "Note: The red dashed line indicates the median."
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
+**Figure 1** shows a strongly right-skewed distribution of mean trip distance, with most observations concentrated at shorter distances. The frequency declines substantially as distance increases. The median, indicated by the dashed line, lies within the lower end of the distribution. This suggests that a relatively small number of long-distance observations may influence the mean.
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
 
-# Step 3: Set up the RStudio environment
-
-## 1.set up RStudio Project
-Create a new RStudio Project in the URBAN5127_NHTS folder. Name it `URBAN5127_NHTS`.
-
-organize the project folder structure
+#### Figure 2. Density Plot of Mean Trip Distance
+```{r}
+ggplot(plot_data, aes(x = mean_trip_miles)) +
+  geom_density(
+    fill = "steelblue",
+    colour = "darkblue",
+    alpha = 0.4,
+    linewidth = 0.8
+  ) +
+  coord_cartesian(
+    xlim = c(0, p95)
+  ) +
+  labs(
+    title = "Density of Mean Trip Distance",
+    subtitle = "Displayed up to the 95th percentile",
+    x = "Mean trip distance (miles)",
+    y = "Density",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
-URBAN5127_NHTS/
-│
-├── URBAN5127_NHTS.Rproj
-│
-├── data/
-│ ├── raw/
-│ │ ├── perv2pub.csv
-│ │ ├── tripv2pub.csv
-│ │ ├── hhv2pub.csv
-│ │ ├── vehv2pub.csv
-│ │ └── ldtv2pub.csv
-│ │
-│ └── processed/
-│
-├── R/
-│ └── 02_data_cleaning.R
-│
-├── figures/
-└── tables/
+**Figure 2** further illustrates the right-skewed distribution of mean trip distance. The density is highest at relatively short distances and declines rapidly as distance increases, with a long right tail. This indicates substantial variation in travel distances and suggests that the distribution should be considered when specifying and diagnosing subsequent regression models.
+
+
+
+#### Figure 3. Faceted Density Plots of Mean Trip Distance by Residential Population Density
+```{r}
+ggplot(
+  plot_data,
+  aes(x = mean_trip_miles)
+) +
+  geom_density(
+    fill = "steelblue",
+    colour = "darkblue",
+    alpha = 0.4,
+    linewidth = 0.7
+  ) +
+  facet_wrap(
+    ~ density_band,
+    ncol = 4,
+    scales = "fixed"
+  ) +
+  coord_cartesian(
+    xlim = c(0, p95)
+  ) +
+  labs(
+    title = "Trip Distance Distributions by Population Density",
+    subtitle = "Eight residential population density categories",
+    x = "Mean trip distance (miles)",
+    y = "Density",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 3** compares trip distance distributions across eight residential population density categories. Higher-density groups, particularly D8, show a greater concentration of observations at shorter distances. Lower-density groups generally display more dispersed distributions. These differences suggest an association between residential population density and trip distance, although other individual and household characteristics may contribute to the observed patterns.
 
-## 2. create a new R Markdown file
-Create a new R Markdown file in the R folder. Name it `URBAN5127_NHTS.Rmd`.
 
-## 3.install and load required packages
-first, install the `tidyverse` package if you haven't already. Then, load the package in your R Markdown file.
-```{r install_and_load_packages, eval=FALSE}
-install.packages("tidyverse") # install tidyverse package if not already installed
-library(tidyverse) # load tidyverse package
+
+#### Figure 4. Boxplot of Mean Trip Distance by Residential Population Density
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = density_band,
+    y = log_trip_miles
+  )
+) +
+  geom_boxplot(
+    fill = "steelblue",
+    colour = "darkblue",
+    alpha = 0.4,
+    outlier.alpha = 0.15,
+    outlier.size = 0.6,
+    width = 0.65
+  ) +
+  mile_y_axis() +
+  labs(
+    title = "Mean Trip Distance by Residential Population Density",
+    subtitle = "Trip distance displayed on a log1p scale",
+    x = "Residential population density category",
+    y = "Mean trip distance (miles; log1p scale)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 4** shows that median trip distance generally decreases as residential population density increases. Lower-density categories have higher medians and wider interquartile ranges, while higher-density categories tend to have shorter trips. However, considerable overlap and numerous outliers remain across groups, indicating substantial individual variation within each density category.
 
-## 4. get the current working directory
-```{r check_working_directory}
-getwd() # check the current working directory
+
+
+#### Figure 5A. Distribution of Sample Size by Residential Population Density
+```{r}
+ggplot(
+  plot_data,
+  aes(x = density_band)
+) +
+  geom_bar(
+    fill = "steelblue",
+    colour = "darkblue",
+    alpha = 0.4,
+    width = 0.7
+  ) +
+  geom_text(
+    stat = "count",
+    aes(label = after_stat(count)),
+    vjust = -0.3,
+    size = 3.5
+  ) +
+  scale_y_continuous(
+    labels = scales::comma,
+    expand = expansion(mult = c(0, 0.1))
+  ) +
+  labs(
+    title = "Sample Distribution by Population Density",
+    x = "Residential population density category",
+    y = "Number of adult travellers",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
-The output should point to the root directory of your URBAN5127_NHTS project.
-Avoid repeatedly using setwd() in the code to set an absolute path on your computer. Using an RStudio Project and relative paths will make it easier to reproduce the analysis in Quarto later.
+**Figure 5A** shows an uneven distribution of respondents across the eight population density categories. D5 and D6 contain the largest samples, with 1,916 and 1,920 individuals respectively, while D8 has only 265 observations. These differences highlight potential imbalances in statistical precision across density groups, particularly in subsequent interaction analyses.
 
-# Step 6: Import data and check variable types
 
-```{r import_data}
-stopifnot(file.exists("data/raw/perv2pub.csv"), file.exists("data/raw/tripv2pub.csv"), file.exists("data/raw/hhv2pub.csv"), file.exists("data/raw/vehv2pub.csv"), file.exists("data/raw/ldtv2pub.csv")) # Check that the data files exist
+#### Figure 5B. Mean and Median Trip Distance by Residential Population Density
+```{r}
+density_stats <- plot_data |>
+  group_by(density_band) |>
+  summarise(
+    n = n(),
+    mean_distance = mean(mean_trip_miles),
+    median_distance = median(mean_trip_miles),
+    .groups = "drop"
+  )
 
-# Read person-level and trip-level data
-person <- read_csv("data/raw/perv2pub.csv", col_types = cols(.default = col_character()), show_col_types = FALSE)
-trip <- read_csv("data/raw/tripv2pub.csv", col_types = cols(.default = col_character()), show_col_types = FALSE)
+density_stats_long <- density_stats |>
+  pivot_longer(
+    cols = c(mean_distance, median_distance),
+    names_to = "Statistic",
+    values_to = "Distance"
+  ) |>
+  mutate(
+    Statistic = recode(
+      Statistic,
+      mean_distance = "Mean",
+      median_distance = "Median"
+    )
+  )
 
-# Check the data dimensions
-dim(person)
-dim(trip)
-
-# Inspect the column structures
-glimpse(person)
-glimpse(trip)
-
-# Check that the required variables are present
-required_person <- c("HOUSEID", "PERSONID", "R_AGE", "HTPPOPDN", "CNTTDTR", "WORKER", "HHSIZE", "HHVEHCNT", "TRAVDAY", "TDAYDATE", "WTPERFIN")
-required_trip <- c("HOUSEID", "PERSONID", "TRIPID", "TRPMILES")
-
-# The stopifnot() function checks whether conditions are TRUE; if not, it raises an error and stops execution.
-stopifnot(all(required_person %in% names(person)), all(required_trip %in% names(trip)))
+ggplot(
+  density_stats_long,
+  aes(
+    x = density_band,
+    y = Distance,
+    fill = Statistic,
+  )
+) +
+  geom_col(
+    position = "dodge",
+    alpha = 0.6,
+    width = 0.7
+  ) +
+  labs(
+    title = "Mean and Median Trip Distance by Population Density",
+    x = "Residential population density category",
+    y = "Trip distance (miles)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    ),
+    fill = "Statistic"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 5B** shows that mean trip distance generally declines across higher population density categories, although the pattern is not strictly monotonic. Mean distances exceed medians in every group, reflecting the influence of longer trips. D2 has the highest mean distance, while D8 has the lowest, suggesting an overall negative association between density and trip distance.
 
-# Step 7: Check for anomalous codes in trip distances
 
-```{r check_trip_distance}
-# mean(c(2, 5, -9))
-
-# ==================================================
-# Step 7: Check trip distances
-# ==================================================
-
-trip <- trip %>% mutate( miles = parse_double(TRPMILES) )
-
-# Overall data summary
-summary(trip$miles)
-
-# Check the original codes
-trip %>% count(TRPMILES, sort = TRUE)
-
-# Count anomalous codes
-trip %>% summarise( total_trips = n(), missing_value = sum(is.na(miles)), negative_distance = sum( miles < 0, na.rm = TRUE ), zero_distance = sum( miles == 0, na.rm = TRUE ), valid_distance = sum( is.finite(miles) & miles >= 0 ) )
-
-# Inspect the specific codes for negative values
-trip %>% filter(miles < 0) %>% count(TRPMILES)
+#### Figure 6. Scatterplot of Age and Mean Trip Distance
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = age,
+    y = mean_trip_miles
+  )
+) +
+  geom_jitter(
+    width = 0.7,
+    height = 0,
+    colour = "steelblue",
+    alpha = 0.15,
+    size = 0.8
+  ) +
+  coord_cartesian(
+    ylim = c(0, p95)
+  ) +
+  labs(
+    title = "Age and Mean Trip Distance",
+    subtitle = "Trip distance displayed up to the 95th percentile",
+    x = "Age (years)",
+    y = "Mean trip distance (miles)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 6** illustrates substantial variation in mean trip distance across different ages. Most observations are concentrated at relatively short distances, while longer trips occur throughout much of the age range. No strong linear relationship is immediately apparent. This suggests that age alone explains limited variation in trip distance and warrants further examination using regression models.
 
-# Step 8: Check primary keys and count trips per person
-```{r check_primary_key}
-# ==================================================
-# Step 8: Validate data primary keys
-# ==================================================
 
-# Person table: one row per person
-anyDuplicated( person[c("HOUSEID", "PERSONID")])
+#### Figure 7. Jitter Plot of Mean Trip Distance by Household Vehicle Ownership
+```{r}
+set.seed(5127)
 
-# Trip table: each person may have multiple trips
-# However, the composite key for each trip should be unique
-anyDuplicated( trip[c("HOUSEID", "PERSONID", "TRIPID")])
-
-# Check for trips that cannot be matched to a person
-unmatched_trips <- trip %>% anti_join( person, by = c("HOUSEID", "PERSONID") )
-
-nrow(unmatched_trips)
-
-# Count the number of trips per person
-trip_counts <- trip %>% group_by(HOUSEID, PERSONID) %>% summarise( n_trips = n(), .groups = "drop" )
-
-# View the results
-head(trip_counts)
-
-# Number of unique respondents with trip records
-nrow(trip_counts)
+ggplot(
+  plot_data,
+  aes(
+    x = car_group,
+    y = log_trip_miles
+  )
+) +
+  geom_jitter(
+    width = 0.18,
+    height = 0,
+    colour = "steelblue",
+    alpha = 0.15,
+    size = 0.8
+  ) +
+  mile_y_axis() +
+  labs(
+    title = "Mean Trip Distance by Household Vehicle Ownership",
+    subtitle = "Individual observations with horizontal jitter",
+    x = "Household vehicle ownership",
+    y = "Mean trip distance (miles; log1p scale)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 7** illustrates differences in trip distance across household vehicle ownership categories. Respondents from households without vehicles are generally concentrated at shorter distances, whereas those with two or more vehicles display a wider range of travel distances. The groups also differ considerably in sample size, highlighting the importance of examining vehicle ownership in subsequent models.
 
-# Step 9: Calculate the average trip distance per person
-```{r calculate_average_trip_distance}
-# ==================================================
-# Step 9: Calculate the average trip distance per person
-# ==================================================
 
-trip_summary <- trip %>% group_by(HOUSEID, PERSONID) %>% summarise( # Number of trips for this person n_trips = n(),  # Check whether all recorded trip distances are valid all_distances_valid = all( is.finite(miles) & miles >= 0 ),  # Calculate the mean only if all distances are valid mean_trip_miles = if (all_distances_valid) { mean(miles) } else { NA_real_ }, .groups = "drop" )
-
-# Inspect the newly created summary table
-glimpse(trip_summary)
-
-# Check the results
-trip_summary %>% summarise( n_persons = n(), invalid_persons = sum(!all_distances_valid), valid_persons = sum(all_distances_valid), zero_mean = sum( mean_trip_miles == 0, na.rm = TRUE ) )
+#### Figure 8. Linear Regression Fit between Age and Mean Trip Distance
+```{r}
+ggplot(plot_data, aes(age, log_trip_miles)) +
+  geom_jitter(
+    width = 0.7,
+    height = 0,
+    colour = "grey10",
+    alpha = 0.15,
+    size = 0.8
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    colour = "blue",
+    linewidth = 1
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x + I(x^2),
+    se = FALSE,
+    colour = "red",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  mile_y_axis() +
+  labs(
+    title = "Linear and Quadratic Trends in Trip Distance",
+    subtitle = "Blue: linear; Red dashed: quadratic",
+    x = "Age (years)",
+    y = "Mean trip distance (miles; log1p scale)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
-# Step 10: Join the trip summary to the person table
-```{r join_trip_summary_to_person}
-# ==================================================
-# Step 10: Join person-level and trip summary data
-# ==================================================
+**Figure 8** compares linear and quadratic trends between age and mean trip distance. Both fitted lines suggest a relatively weak relationship, although the quadratic specification indicates some curvature, particularly at older ages. The substantial dispersion of observations around both curves suggests that age alone has limited explanatory power and supports including additional control variables.
 
-person_day <- person %>% left_join( trip_summary, by = c("HOUSEID", "PERSONID"), relationship = "one-to-one" )
-
-# Confirm that the join neither added nor dropped any people
-nrow(person_day)
-nrow(person)
-
-stopifnot( nrow(person_day) == nrow(person))
-
-# Inspect a sample of records
-person_day %>% select( HOUSEID, PERSONID, R_AGE, HTPPOPDN, n_trips, mean_trip_miles ) %>% head(10)
+#### Figure 9. Boxplot of Mean Trip Distance by Household Vehicle Ownership
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = car_group,
+    y = log_trip_miles,
+    fill = car_group,
+    alpha = 0.4,
+  )
+) +
+  geom_boxplot(
+    outlier.alpha = 0.12,
+    outlier.size = 0.6,
+    width = 0.6
+  ) +
+  mile_y_axis() +
+  labs(
+    title = "Trip Distance by Household Vehicle Ownership",
+    x = "Household vehicle ownership",
+    y = "Mean trip distance (miles; log1p scale)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  theme(legend.position = "none")
 ```
+**Figure 9** shows differences in mean trip distance across vehicle ownership categories. Households without vehicles have the lowest median trip distance, while households with two or more vehicles have the highest. The interquartile ranges also increase with vehicle ownership. However, overlapping distributions and numerous outliers indicate considerable variation within each group.
 
-# Step 11: Check that the two tables are correctly linked
-```{r check_joined_data}
-# ==================================================
-# Step 11: Check the consistency of trip counts
-# ==================================================
 
-person_day <- person_day %>% mutate( reported_trips = parse_integer(CNTTDTR), recorded_trips = coalesce( n_trips, 0L ) )
-
-# Respondents with inconsistent trip counts
-mismatch <- person_day %>% filter( is.na(reported_trips) | recorded_trips != reported_trips )
-
-# Count respondents with inconsistent trip counts
-nrow(mismatch)
-
-# Count people with no trips
-person_day %>% summarise( all_persons = n(), with_trips = sum(recorded_trips > 0), without_trips = sum(recorded_trips == 0) )
+#### Figure 10. Density Plots of Mean Trip Distance by Household Vehicle Ownership
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = mean_trip_miles,
+    fill = car_group,
+    colour = car_group
+  )
+) +
+  geom_density(
+    alpha = 0.25,
+    linewidth = 0.8
+  ) +
+  coord_cartesian(
+    xlim = c(0, p95)
+  ) +
+  labs(
+    title = "Trip Distance Distributions by Vehicle Ownership",
+    subtitle = "Density curves by household vehicle ownership",
+    x = "Mean trip distance (miles)",
+    y = "Density",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    ),
+    fill = "Vehicle ownership",
+    colour = "Vehicle ownership"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 10** compares trip distance distributions across three vehicle ownership categories. Households without vehicles show a pronounced concentration at very short distances. Households with one or more vehicles exhibit distributions extending further towards longer trips. Nevertheless, all three distributions remain right-skewed, and substantial overlap suggests that vehicle ownership alone cannot explain travel distance differences.
 
-# Step 12: Filter for adults aged 18 and older
-```{r filter_adults}
-# ==================================================
-# Step 12: Filter for adults
-# ==================================================
 
-person_day <- person_day %>% mutate( age = parse_double(R_AGE) )
-
-# Check the age distribution
-summary(person_day$age)
-
-# Check for missing ages
-sum(is.na(person_day$age))
-
-# Filter for people aged 18 and older
-adult <- person_day %>% filter(age >= 18)
-
-# Count the remaining people
-nrow(adult)
+#### Figure 11. Boxplots of Mean Trip Distance by Residential Population Density and Household Vehicle Ownership
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = density_band,
+    y = log_trip_miles
+  )
+) +
+  geom_boxplot(
+    fill = "steelblue",
+    colour = "darkblue",
+    alpha = 0.4,
+    outlier.alpha = 0.12,
+    outlier.size = 0.5
+  ) +
+  facet_wrap(
+    ~ car_group,
+    nrow = 1
+  ) +
+  mile_y_axis() +
+  labs(
+    title = "Population Density, Vehicle Ownership and Trip Distance",
+    subtitle = "Trip distance distributions across vehicle ownership groups",
+    x = "Residential population density category",
+    y = "Mean trip distance (miles; log1p scale)",
+    caption = paste(
+      "Source: Federal Highway Administration (FHWA), ",
+      "2022 NextGen NHTS Core Data, Version 2.1.\n"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
 ```
+**Figure 11** examines trip distance distributions across population density categories within each vehicle ownership group. Trip distances generally appear shorter in higher-density areas, although the patterns vary between ownership categories. Considerable overlap remains, and some density–vehicle combinations contain relatively few observations. These differences motivate further investigation using interaction terms in the regression models.
 
-# Step 13: Filter for adults with trip records on the survey day
-```{r filter_adults_with_trips} 
-# ==================================================
-# Step 13: Filter for adults with trips
-# ==================================================
+---
 
-# First, count people with and without trips
-adult %>% count( has_trip = recorded_trips > 0 )
+# Reflection
 
-# Keep only people with trip records
-traveller <- adult %>% filter(recorded_trips > 0)
-
-nrow(traveller)
-```
-
-# Step 14: Exclude adults with invalid trip distances
-```{r filter_adults_with_valid_distance}
-# ==================================================
-# Step 14: Exclude people with invalid distances
-# ==================================================
-
-# First, count people with invalid distances
-traveller %>% count(all_distances_valid)
-
-# Keep people whose trip distances are all valid
-complete_distance <- traveller %>% filter(all_distances_valid)
-
-nrow(complete_distance)
-
-# Check again whether the average distance is valid
-sum( is.na(complete_distance$mean_trip_miles))
-```
-
-# Step 15: Filter for valid residential population density
-```{r filter_valid_pop_density}
-# ==================================================
-# Step 15: Filter for valid population density
-# ==================================================
-
-# Inspect the distribution of the original population density codes
-complete_distance %>% count(HTPPOPDN, sort = TRUE)
-
-# Define the eight valid category codes
-valid_density_codes <- sprintf( "%02d", 1:8)
-
-valid_density_codes
-
-# Filter for valid population density
-known_density <- complete_distance %>% filter( HTPPOPDN %in% valid_density_codes )
-
-nrow(known_density)
-```
-
-# Step 16: Check control variables and survey weights
-```{r check_control_variables_and_weights}
-# ==================================================
-# Step 16: Check and clean the core control variables
-# ==================================================
-
-known_density <- known_density %>% mutate( hh_size = parse_double(HHSIZE), vehicles = parse_double(HHVEHCNT), person_weight = parse_double(WTPERFIN) )
-
-# Distribution of employment status
-known_density %>% count(WORKER)
-
-# Household size
-summary(known_density$hh_size)
-
-# Number of vehicles in the household
-summary(known_density$vehicles)
-
-# Day of the week of the survey
-known_density %>% count(TRAVDAY)
-
-# Person-level survey weights
-summary(known_density$person_weight)
-
-# Check the regional control variable
-known_density %>% count(CENSUS_R)
-
-# Check the survey date
-known_density %>% count(TDAYDATE)
-
-# Apply the final filters
-analysis_data <- known_density %>% filter( WORKER %in% c("01", "02"), hh_size > 0, vehicles >= 0, TRAVDAY %in% sprintf("%02d", 1:7), is.finite(person_weight), person_weight > 0 )
-
-nrow(analysis_data)
-```
-
-# Step 17: Construct and recode variables
-```{r finalize_variables}
-# ==================================================
-# Step 17: Recode variables
-# ==================================================
-
-analysis_data <- analysis_data %>% mutate( # 1. Key independent variable: tract population density density_band = factor( HTPPOPDN, levels = sprintf("%02d", 1:8) ),  # 2. Employment status worker = factor( WORKER, levels = c("01", "02"), labels = c("worker", "not_worker") ),  # 3. Household vehicle groups car_group = factor( case_when( vehicles == 0 ~ "0", vehicles == 1 ~ "1", vehicles >= 2 ~ "2+" ), levels = c("0", "1", "2+") ),  # 4. Day of the week of the survey day_of_week = factor( TRAVDAY, levels = sprintf("%02d", 1:7), labels = c( "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" ) ),  # 5. Survey period survey_period = factor(TDAYDATE),  # 6. Census region census_region = factor(CENSUS_R),  # 7. Convert miles to kilometers mean_trip_km = mean_trip_miles * 1.609344,  # 8. Precompute the log-transformed version log_mean_trip = log1p(mean_trip_miles) )
-```
+This preliminary analysis has strengthened my understanding of how survey data can be cleaned, combined, and explored in R. The descriptive results suggest differences in trip distance across density and vehicle ownership groups, but do not establish causality. The highly skewed outcome and uneven group sizes highlight important analytical limitations. In the next stage, I will use multivariable regression and sensitivity checks to assess whether these associations persist after adjustment.
 
 
-# Step 18: Final quality checks
-1. Check the number of records and households
-```{r final_quality_check}
-# ==================================================
-# Final check A: Sample size
-# ==================================================
+---
 
-nrow(analysis_data)
+# References
 
-n_distinct(analysis_data$HOUSEID)
+Cervero, R. and Kockelman, K. (1997) 'Travel demand and the 3Ds: Density, diversity, and design', *Transportation Research Part D: Transport and Environment*, 2(3), pp. 199–219. https://doi.org/10.1016/S1361-9209(97)00009-6
 
-n_distinct( analysis_data$HOUSEID, analysis_data$PERSONID)
+Ewing, R. and Cervero, R. (2010) 'Travel and the built environment: A meta-analysis', *Journal of the American Planning Association*, 76(3), pp. 265–294. https://doi.org/10.1080/01944361003766766
 
-# Check for duplicate records for the same person
-anyDuplicated( analysis_data[c("HOUSEID", "PERSONID")])
-```
+Stevens, M.R. (2017) 'Does compact development make people drive less?', *Journal of the American Planning Association*, 83(1), pp. 7–18. https://doi.org/10.1080/01944363.2016.1240044
 
-2. Check that the outcome variable is valid
-```{r final_quality_check_response_variable}
-# ==================================================
-# Final check B: Outcome variable
-# ==================================================
+Federal Highway Administration (2022) *2022 National Household Travel Survey*. Washington, DC: U.S. Department of Transportation. Available at: https://nhts.ornl.gov/ (Accessed: 8 November 2026).
 
-summary(analysis_data$mean_trip_miles)
 
-sum(is.na(analysis_data$mean_trip_miles))
-
-sum(analysis_data$mean_trip_miles < 0)
-
-sum(analysis_data$mean_trip_miles == 0)
-
-quantile( analysis_data$mean_trip_miles, probs = c(0.25, 0.5, 0.75, 0.95, 0.99), na.rm = TRUE)
-```
-
-3. Check whether the population density sample is reasonably distributed
-```{r final_quality_check_density_distribution}
-# ==================================================
-# Final check C: Population density
-# ==================================================
-
-analysis_data %>% group_by(density_band) %>% summarise( persons = n(), households = n_distinct(HOUSEID), .groups = "drop" )
-```
-
-4. Check group support for the interaction between population density and vehicle count
-```{r final_quality_check_density_car_interaction}
-# ==================================================
-# Final check D: Feasibility of the interaction analysis
-# ==================================================
-
-analysis_data %>% count( density_band, car_group ) %>% pivot_wider( names_from = car_group, values_from = n, values_fill = 0 )
-```
-# Step 19: Create a sample selection flow table
-```{r sample_selection_flow_chart}
-# ==================================================
-# Final check E: Sample selection flow
-# ==================================================
-
-sample_flow <- tibble( step = c( "All respondents", "Adults aged 18+", "Adult travelers", "Complete trip distances", "Valid population density", "Valid core covariates" ), remaining_n = c( nrow(person), nrow(adult), nrow(traveller), nrow(complete_distance), nrow(known_density), nrow(analysis_data) )) %>% mutate( excluded_n = lag( remaining_n, default = first(remaining_n) ) - remaining_n, retained_percent = round( 100 * remaining_n / first(remaining_n), 2 ) )
-
-print(sample_flow)
-```
-
-# Step 20: Save the cleaned data
-```{r save_cleaned_data}
-# ==================================================
-# Save the results
-# ==================================================
-
-# Create the processed directory if it does not exist
-dir.create( "data/processed", recursive = TRUE, showWarnings = FALSE)
-
-dir.create( "tables", recursive = TRUE, showWarnings = FALSE)
-
-# Save in native R data format
-saveRDS( analysis_data, "data/processed/analysis_data.rds")
-
-# Also save as CSV for easier manual inspection
-write_csv( analysis_data, "data/processed/analysis_data.csv")
-
-# Save the sample selection table
-write_csv( sample_flow, "tables/sample_flow.csv")
-```
