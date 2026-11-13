@@ -1,0 +1,35 @@
+term,estimate
+(Intercept),24.162234819612202
+age_c,-0.10502142473960045
+I(age_c^2),-0.003381250990794823
+workerWorker,0.031087040499938105
+hh_size,-1.4669911553412462
+survey_day02,-7.735385197661204
+survey_day03,-12.259521196856703
+survey_day04,-11.868462301920433
+survey_day05,-13.259157074252297
+survey_day06,-6.7910378323215985
+survey_day07,-3.2522133981000576
+density_8D2,4.607122103899607
+density_8D3,-2.5755510680561793
+density_8D4,-1.6195888303132349
+density_8D5,4.154054010963172
+density_8D6,2.475139205646802
+density_8D7,0.9708489134804734
+density_8D8,-1.6901379661645775
+car_group0 vehicles,-3.7015240162043157
+car_group2+ vehicles,12.499031043967932
+density_8D2:car_group0 vehicles,-5.839134720657655
+density_8D3:car_group0 vehicles,5.070398589614981
+density_8D4:car_group0 vehicles,-2.482995884483818
+density_8D5:car_group0 vehicles,-9.960191454412646
+density_8D6:car_group0 vehicles,-6.322946559059268
+density_8D7:car_group0 vehicles,-7.302376376847319
+density_8D8:car_group0 vehicles,-4.333409345085269
+density_8D2:car_group2+ vehicles,-2.6936054296547485
+density_8D3:car_group2+ vehicles,-3.1101276103103714
+density_8D4:car_group2+ vehicles,0.8562928505797002
+density_8D5:car_group2+ vehicles,-10.177981032619584
+density_8D6:car_group2+ vehicles,-9.89155690753048
+density_8D7:car_group2+ vehicles,-15.220305565745395
+density_8D8:car_group2+ vehicles,1.8735535399179977

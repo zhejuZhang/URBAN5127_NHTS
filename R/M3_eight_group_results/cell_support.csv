@@ -1,0 +1,25 @@
+density,car_group,persons,households,sparse_20
+D1,1 vehicle,189,167,FALSE
+D1,0 vehicles,6,6,TRUE
+D1,2+ vehicles,944,599,FALSE
+D2,1 vehicle,241,210,FALSE
+D2,0 vehicles,16,14,TRUE
+D2,2+ vehicles,1073,665,FALSE
+D3,1 vehicle,168,146,FALSE
+D3,0 vehicles,10,9,TRUE
+D3,2+ vehicles,594,358,FALSE
+D4,1 vehicle,259,228,FALSE
+D4,0 vehicles,18,17,TRUE
+D4,2+ vehicles,995,604,FALSE
+D5,1 vehicle,436,373,FALSE
+D5,0 vehicles,40,35,FALSE
+D5,2+ vehicles,1440,878,FALSE
+D6,1 vehicle,573,463,FALSE
+D6,0 vehicles,76,61,FALSE
+D6,2+ vehicles,1271,770,FALSE
+D7,1 vehicle,208,164,FALSE
+D7,0 vehicles,27,25,FALSE
+D7,2+ vehicles,203,126,FALSE
+D8,1 vehicle,124,88,FALSE
+D8,0 vehicles,93,79,FALSE
+D8,2+ vehicles,48,28,FALSE

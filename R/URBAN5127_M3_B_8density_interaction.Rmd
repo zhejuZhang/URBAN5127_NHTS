@@ -1,0 +1,340 @@
+---
+title: "URBAN5127 | M3 interaction model — 8-category density × 3-category vehicle interaction"
+subtitle: "2022 NextGen NHTS · independent follow-up to Formative 1"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+params:
+  data_path: "../data/processed/analysis_data.rds"
+  output_dir: "M3_eight_group_results"
+---
+
+> **用途 / Purpose.** 本文是配合 `3281675Z_URBAN5127_Formative_1.Rmd` 的独立后续分析脚本，**不是替代原始形成性作业的提交稿**。它直接复用原文件生成的 `analysis_data.rds`，不会再次筛选原始旅程或覆盖任何旧结果。导出结果用于比较模型与向老师讨论建模选择。
+>
+> **路径 / Path.** 你的原始 Rmd 使用 `../data/processed/analysis_data.rds`；把本文件放在和原 Rmd **同一个项目文件夹**后点击 *Knit*。若文件放在别的目录，在顶部 `params: data_path:` 中修改数据路径。请先运行原始 Rmd 的数据清洗部分，确保 RDS 已生成。
+>
+> **统计口径.** 每行一位成年出行者；`mean_trip_miles` 为每位受访者调查日的**平均每次**行程距离（英里），不是每日总里程。以下是未加权 OLS 的样本内条件关联，不构成因果估计；如需全国总体推断，未来应考虑 NHTS 抽样设计及权重。
+
+# 1. 加载包和第四阶段数据
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = TRUE, fig.width = 9, fig.height = 5.5)
+```
+
+```{r libraries}
+need <- c("tidyverse", "broom", "knitr")
+missing <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) stop("请先安装 R 包 / Install packages: ", paste(missing, collapse = ", "))
+library(tidyverse)
+library(broom)
+library(knitr)
+
+if (!file.exists(params$data_path)) {
+  stop("未找到清洗数据：", params$data_path,
+       "\n请先运行原始 Formative Rmd 中的 saveRDS(analysis_data, '../data/processed/analysis_data.rds')，",
+       "并确保本文件与原始 Rmd 在同一目录，或修改 YAML 中 params$data_path。")
+}
+analysis_data <- readRDS(params$data_path)
+out_dir <- params$output_dir
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## 1.1 按原始代码的实际变量名构建统一样本
+
+原始 Rmd 的字段名是 `HTPPOPDN`、`WORKER`、`TRAVDAY`、`vehicles`、`hh_size`、`age`、`mean_trip_miles` 和 `HOUSEID`，**不是**先前讨论中的 `worker` / `day_of_week` 等假定列。以下由这些真实字段生成回归因子，四档和八档方案均使用**完全相同的建模样本**。
+
+```{r common-sample}
+required <- c("HOUSEID", "PERSONID", "mean_trip_miles", "HTPPOPDN",
+              "age", "hh_size", "vehicles", "WORKER", "TRAVDAY")
+absent <- setdiff(required, names(analysis_data))
+if (length(absent)) stop("analysis_data.rds 缺少字段：", paste(absent, collapse = ", "))
+
+model_data <- analysis_data |>
+  transmute(
+    HOUSEID = as.character(HOUSEID),
+    PERSONID = as.character(PERSONID),
+    mean_trip_miles = as.numeric(mean_trip_miles),
+    density_code = sprintf("%02d", as.integer(as.character(HTPPOPDN))),
+    age = as.numeric(age),
+    hh_size = as.numeric(hh_size),
+    vehicles = as.numeric(vehicles),
+    WORKER = as.character(WORKER),
+    TRAVDAY = as.character(TRAVDAY)
+  ) |>
+  filter(
+    is.finite(mean_trip_miles), mean_trip_miles >= 0,
+    is.finite(age), age >= 18,
+    is.finite(hh_size), hh_size > 0,
+    is.finite(vehicles), vehicles >= 0,
+    density_code %in% sprintf("%02d", 1:8),
+    WORKER %in% c("01", "02"),
+    TRAVDAY %in% sprintf("%02d", 1:7)
+  ) |>
+  mutate(
+    density_8 = factor(paste0("D", as.integer(density_code)),
+                       levels = paste0("D", 1:8)),
+    density_4 = factor(case_when(
+      density_code %in% c("01", "02") ~ "D1",
+      density_code %in% c("03", "04") ~ "D2",
+      density_code %in% c("05", "06") ~ "D3",
+      density_code %in% c("07", "08") ~ "D4"
+    ), levels = paste0("D", 1:4)),
+    car_group = factor(case_when(
+      vehicles == 0 ~ "0 vehicles",
+      vehicles == 1 ~ "1 vehicle",
+      vehicles >= 2 ~ "2+ vehicles"
+    ), levels = c("1 vehicle", "0 vehicles", "2+ vehicles")),
+    worker = factor(WORKER, levels = c("02", "01"),
+                    labels = c("Non-worker", "Worker")),
+    survey_day = factor(TRAVDAY, levels = sprintf("%02d", 1:7)),
+    age_c = age - mean(age)
+  ) |>
+  tidyr::drop_na(HOUSEID, PERSONID, mean_trip_miles,
+                 density_8, density_4, car_group, worker, survey_day, age_c, hh_size)
+
+stopifnot(nrow(model_data) == n_distinct(model_data$HOUSEID, model_data$PERSONID))
+sample_audit <- tibble(
+  Item = c("原始清洗样本人数", "当前共同回归样本人数", "不同家庭数", "缺失/无效而被排除的人数"),
+  Value = c(nrow(analysis_data), nrow(model_data),
+            n_distinct(model_data$HOUSEID), nrow(analysis_data)-nrow(model_data))
+)
+knitr::kable(sample_audit, caption = "Sample audit: shared regression sample")
+if (nrow(model_data) != 9052L) {
+  warning("当前样本数不是此前核验的 9,052。请核对原始清洗对象；不要直接假定两次分析相同。")
+}
+```
+
+# 2. 模型的共同基线 M0–M2（原始八档）
+
+参考组：密度 `D1`（0–99 人/平方英里）、**1 vehicle**、**Non-worker**、调查日代码 `01`。`age_c = 0` 对应样本平均年龄。`WORKER='01'` 编码为 Worker、`WORKER='02'` 编码为 Non-worker；调查日维持原始 `TRAVDAY` 分类编码，避免擅自指定星期名称。
+
+```{r baseline-models}
+m0 <- lm(mean_trip_miles ~ age_c + I(age_c^2) + worker + hh_size + survey_day,
+         data = model_data)
+m1_8 <- update(m0, . ~ . + density_8)
+m2_8 <- update(m1_8, . ~ . + car_group)
+
+stopifnot(nobs(m0) == nrow(model_data), nobs(m1_8) == nrow(model_data),
+          nobs(m2_8) == nrow(model_data))
+
+baseline_fit <- purrr::imap_dfr(
+  list(M0 = m0, M1_8 = m1_8, M2_8 = m2_8),
+  ~ broom::glance(.x) |> mutate(Model = .y, .before = 1)
+) |>
+  select(Model, nobs, r.squared, adj.r.squared, sigma, AIC, BIC)
+knitr::kable(baseline_fit, digits = 4, caption = "Baseline model comparison")
+
+# 这两个比较严格嵌套，且使用相同观测
+a_01 <- anova(m0, m1_8)
+a_12 <- anova(m1_8, m2_8)
+knitr::kable(as.data.frame(a_01), digits = 4, caption = "M0 vs M1 (8 density groups)")
+knitr::kable(as.data.frame(a_12), digits = 4, caption = "M1 vs M2 (vehicle ownership)")
+```
+# 3. 密度 × 家庭车辆数交叉样本检查
+
+**不能只看整体 9,052 人。** 要先检查每一个密度与汽车拥有量组合的人数和不同家庭数。以下人数为未加权的受访者数量；`< 20` 仅用于**提示**稀疏单元，并不是正式的统计学硬阈值。
+
+```{r cell-support}
+cell_support <- model_data |>
+  group_by(density_8, car_group, .drop = FALSE) |>
+  summarise(
+    persons = n(),
+    households = n_distinct(HOUSEID),
+    .groups = "drop"
+  ) |>
+  rename(density = density_8) |>
+  mutate(
+    sparse_20 = persons < 20,
+    label = paste0(persons, "\n(", households, " HH)")
+  )
+knitr::kable(cell_support |> select(-label), caption = "Cell support: persons and distinct households")
+write_csv(cell_support |> select(-label), file.path(out_dir, "cell_support.csv"))
+
+p_support <- ggplot(cell_support,
+                    aes(x = density, y = car_group, fill = persons)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = label), size = 3) +
+  labs(
+    title = "Density × vehicle ownership: sample support",
+    subtitle = "Each cell: respondents (distinct households)",
+    x = "Population density group", y = "Household vehicle ownership", fill = "Persons"
+  ) + theme_minimal(base_size = 11)
+print(p_support)
+ggsave(file.path(out_dir, "cell_support_heatmap.png"), p_support,
+       width = 8.5, height = 4.6, dpi = 300)
+if (any(cell_support$persons == 0L)) warning("存在无观测交叉组：交互模型可能秩亏，勿解释对应系数或进行外推。")
+if (any(cell_support$sparse_20)) {
+  cat("**提示：** 下表显示样本数少于20的交叉组合。可能出现较大标准误及对少数受访者敏感的交互估计。\n\n")
+  print(knitr::kable(cell_support |> filter(sparse_20) |> select(-label)))
+}
+```
+# 4. 方案 B：八档人口密度交互模型
+
+八档密度直接与三档车辆组交互，共有 24 个交叉组合；相比 `M2_8`，完整列秩时会新增 `(8-1)×(3-1)=14` 个交互系数。
+
+这里 M2 与 M3 使用**同一份八档编码、同样的样本、相同主效应**，因此可直接进行嵌套模型比较。
+
+```{r m3-eight}
+m3_8 <- update(m2_8, . ~ . + density_8:car_group)
+
+stopifnot(nobs(m3_8) == nobs(m2_8), nobs(m3_8) == nrow(model_data))
+rank_ok <- m3_8$rank == length(coef(m3_8)) && !anyNA(coef(m3_8))
+cat("M3_8 full rank / 模型满秩：", rank_ok, "\n")
+if (!rank_ok) {
+  cat("交互模型存在无法单独估计的系数。请先检查空交叉单元与 alias(m3_8)。\n")
+  print(alias(m3_8))
+}
+knitr::kable(broom::glance(m2_8) |> mutate(Model="M2_8",.before=1) |>
+               bind_rows(broom::glance(m3_8) |> mutate(Model="M3_8",.before=1)) |>
+               select(Model,nobs,r.squared,adj.r.squared,sigma,AIC,BIC),
+             digits=4, caption="Matched eight-group model comparison")
+
+nested_test <- anova(m2_8, m3_8)
+knitr::kable(as.data.frame(nested_test), digits=4,
+             caption="Joint conventional F-test: fourteen eight-group interaction terms")
+
+coefs_m3 <- broom::tidy(m3_8, conf.int = TRUE)
+knitr::kable(coefs_m3, digits=4, caption="M3_8 coefficient estimates (conventional OLS)")
+write_csv(coefs_m3, file.path(out_dir,"M3_8_coefficients.csv"))
+```
+
+**解释规则**：在 `D1 + 1 vehicle` 作为参考组合的条件下，人口密度主效应表示**一车家庭**相对 D1 的差异；车辆数主效应表示**D1 区域**内相对一车家庭的差异；14 个交互系数表示这些密度差异在无车和多车家庭中与一车家庭相比如何改变。小样本交叉单元会影响精度，必须结合人数、家庭数、置信区间和影响点讨论。
+# 5. 可选：家庭聚类稳健系数检验与联合检验
+
+原始数据中有同一家庭的多个成年人。常规 `summary(lm)` / `anova()` 的标准误及 F 检验没有自动处理家庭内误差相关。下面在安装 `sandwich`、`lmtest`、`car` 后进一步做**按 HOUSEID 聚类**的系数与交互项联合检验。缺少可选包时不影响其他代码 Knit；但必须在论文中区分普通检验与聚类稳健检验。家庭聚类**不等于** NHTS 全套抽样设计加权推断。
+
+```{r robust-inference}
+robust_available <- all(vapply(c("sandwich", "lmtest", "car"),
+                               requireNamespace, logical(1), quietly = TRUE))
+V_pred <- stats::vcov(m3_8)
+uncertainty_label <- "Conventional OLS 95% CI"
+
+if (robust_available && rank_ok) {
+  # 已保证 lm 使用了 model_data 的全部行，因此此向量与模型残差顺序一致
+  V_cluster <- sandwich::vcovCL(m3_8, cluster = model_data$HOUSEID, type = "HC1")
+  print(lmtest::coeftest(m3_8, vcov. = V_cluster))
+  term_names <- names(coef(m3_8))
+  interaction_names <- term_names[grepl(":", term_names, fixed = TRUE)]
+  R <- diag(length(term_names))
+  colnames(R) <- term_names
+  rownames(R) <- term_names
+  R <- R[interaction_names, , drop = FALSE]
+  joint_robust <- car::linearHypothesis(
+    m3_8, hypothesis.matrix = R, rhs = rep(0, nrow(R)),
+    vcov. = V_cluster, test = "F"
+  )
+  print(joint_robust)
+  V_pred <- V_cluster
+  uncertainty_label <- "Household-clustered 95% CI (normal approximation)"
+} else {
+  cat("未进行家庭聚类联合检验：请安装 sandwich, lmtest, car，且确保 M3 无秩亏。\n")
+}
+```
+
+# 6. 调整后的预测均值：人口密度 × 车辆组
+
+下图的预测值采用**样本标准化（g-computation 式的描述性标准化）**：对每一个密度×车辆组合，保持全部观测的年龄、就业、家庭规模及调查日分布不变，只把密度和车辆组设置为对应组合，计算预测均值后取平均。这是模型上的**条件关联比较**，不是因果效应，也不是原始样本每格的实际均值。
+
+对于四档模型输出 12 个组合；八档模型输出 24 个组合。只有模型满秩且所有交叉组都有数据时才生成图，避免把不可估计的组合当作实证结果。
+
+```{r adjusted-predictions, fig.height=5.8}
+if (rank_ok && all(cell_support$persons > 0L)) {
+  predictions <- tidyr::expand_grid(
+    density = levels(model_data$density_8),
+    car = levels(model_data$car_group)
+  ) |>
+    purrr::pmap_dfr(function(density, car) {
+      nd <- model_data
+      nd$density_8 <- factor(rep(density, nrow(nd)),
+                                levels = levels(model_data$density_8))
+      nd$car_group <- factor(rep(car, nrow(nd)),
+                              levels = levels(model_data$car_group))
+      X <- model.matrix(stats::delete.response(stats::terms(m3_8)), data = nd,
+                        contrasts.arg = m3_8$contrasts)
+      b <- coef(m3_8)
+      if (!identical(colnames(X), names(b))) {
+        stop("预测设计矩阵与回归系数列名不匹配；请检查变量编码。")
+      }
+      xbar <- colMeans(X)
+      estimate <- sum(xbar * b)
+      se <- sqrt(drop(crossprod(xbar, V_pred %*% xbar)))
+      tibble(density = density, car_group = car,
+             adjusted_mean = estimate, se = se,
+             low = estimate - 1.96 * se,
+             high = estimate + 1.96 * se)
+    })
+
+  p_interact <- ggplot(predictions,
+                       aes(x = density, y = adjusted_mean,
+                           colour = car_group, group = car_group)) +
+    geom_line(linewidth = 0.8) + geom_point(size = 2.3) +
+    geom_errorbar(aes(ymin = low, ymax = high), width = 0.12, alpha = 0.65) +
+    labs(title = "Adjusted mean trip distance by density and vehicle ownership",
+         subtitle = uncertainty_label,
+         x = "Residential population density category",
+         y = "Model-adjusted mean trip distance (miles)",
+         colour = "Household vehicles",
+         caption = "Unweighted OLS; other covariates standardised to the observed sample distribution") +
+    theme_minimal(base_size = 11)
+  print(p_interact)
+  ggsave(file.path(out_dir, "M3_adjusted_predictions.png"), p_interact,
+         width = 9, height = 5.7, dpi = 300)
+  write_csv(predictions, file.path(out_dir, "M3_adjusted_predictions.csv"))
+} else {
+  cat("跳过调整后预测图：存在空交叉组或模型秩亏，不能可靠推断所有组合。\n")
+}
+```
+
+# 7. 诊断：极端值、异方差、模型设定与影响力
+
+你的原始 `mean_trip_miles` 右偏且含有效的零值，使用原始英里 OLS 时尤其要关注极端距离；**不要为了让模型显著随意删除观测**。本节保留原始数据，只做诊断。
+
+```{r quick-diagnostics}
+cat("残差标准误：", summary(m3_8)$sigma, "\n")
+cat("负预测数量：", sum(fitted(m3_8) < 0), "\n")
+cd <- cooks.distance(m3_8)
+cat("Cook's D > 4/n 的观测数：", sum(cd > 4/nobs(m3_8), na.rm=TRUE), "\n")
+
+if (requireNamespace("lmtest", quietly = TRUE)) {
+  print(lmtest::bptest(m3_8))
+  print(lmtest::resettest(m3_8, power=2:3, type="fitted"))
+} else {
+  cat("需安装 lmtest 才能运行 BP 与 RESET 检验。\n")
+}
+```
+
+```{r diagnostic-plots, fig.width=10, fig.height=8}
+par(mfrow = c(2,2))
+plot(m3_8, which = 1)
+plot(m3_8, which = 2)
+plot(m3_8, which = 3)
+plot(m3_8, which = 5)
+par(mfrow = c(1,1))
+```
+
+# 8. 导出模型和对老师讨论的结论框架
+
+```{r save-models}
+model_bundle <- list(M0=m0, M1_8=m1_8, M2_8=m2_8, M3_8=m3_8)
+saveRDS(model_bundle, file.path(out_dir, "regression_models.rds"))
+write_csv(baseline_fit, file.path(out_dir, "baseline_model_fit.csv"))
+write_csv(broom::glance(m3_8), file.path(out_dir, "M3_model_fit.csv"))
+write_csv(tibble(term=names(coef(m3_8)),estimate=unname(coef(m3_8))),
+          file.path(out_dir, "M3_parameters.csv"))
+cat("全部结果输出到：", normalizePath(out_dir), "\n")
+```
+
+## 如何解释结果 / Interpretation checklist
+
+1. 首先检查交叉单元的人数与独立家庭数：零单元、样本非常稀少的单元，以及参考组是否可靠。
+2. 报告匹配的非交互模型与交互模型比较中**整体交互项联合检验**的 F、自由度和 p 值，不要只挑显著的单项交互。
+3. 比较调整后的预测均值和置信区间；结果表现出起伏不等于有显著交互，必须与联合检验一致讨论。
+4. 对同时来自一个家庭的多个受访者，优先检查按家庭聚类的推断；考虑 NHTS 权重时应另行开展调查设计分析。
+5. 报告诊断结果及局限：模型是观察性、未加权 OLS，不能将人口密度的系数解释为因果作用。
+
+## 两个方案的取舍 / How to choose
+
+**八档 M3 的优势**：与八档的 M1、M2 使用完全一致的密度编码，使 `M2_8 → M3_8` 成为直接嵌套比较，并保留更细的密度分组；**代价**：14 个额外交互项、部分非常稀疏的交叉组合，标准误与影响点敏感性可能更严重。建议检查家庭数、联合检验和高影响观测，并与四档方案的结论做敏感性比较，而不是仅以原始 R² 较高选择复杂模型。
